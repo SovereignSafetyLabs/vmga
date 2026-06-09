@@ -25,12 +25,22 @@ Before exposing an OpenClaw-backed VMGA deployment, run:
 ```bash
 openclaw doctor
 openclaw security audit --deep
+openclaw secrets audit --check
 openclaw health
 ```
 
 Record the audit output, accepted residual warnings, gateway config hash, VMGA
-policy hash, plugin manifest hash, and proof that non-VMGA Gmail write paths are
-denied. See `docs/openclaw_integration.md` for the detailed OpenClaw checklist.
+policy hash, plugin manifest hash, secrets audit output, and proof that non-VMGA
+Gmail write paths are denied. If `openclaw secrets apply` or
+`openclaw secrets reload` is part of the deployment, keep the plan and reload
+result in release evidence. See `docs/openclaw_integration.md` for the detailed
+OpenClaw checklist.
+
+SecretRefs are useful but do not isolate secrets from an agent that can read
+files or execute commands in the same authority context. If plaintext
+credentials, OAuth refresh material, copied configs, backups, generated model
+catalogs, or unsupported credential classes remain readable by the agent,
+describe the deployment as advisory.
 
 ## Advisory Mode
 

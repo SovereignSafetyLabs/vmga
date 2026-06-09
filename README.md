@@ -58,6 +58,9 @@ pytest -q
   does not imply OWASP certification or endorsement.
 - OpenClaw's public gateway security, exposure, formal-model, and MITRE ATLAS
   threat-model docs, as deployment-boundary references for OpenClaw integrations.
+- OpenClaw SecretRef, secrets audit, and trusted-proxy auth docs, as credential
+  migration and gateway-auth references. SecretRefs are treated as plaintext
+  residue reduction, not process isolation.
 
 ## Non-Goals
 
