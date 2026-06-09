@@ -61,6 +61,9 @@ pytest -q
 - OpenClaw SecretRef, secrets audit, and trusted-proxy auth docs, as credential
   migration and gateway-auth references. SecretRefs are treated as plaintext
   residue reduction, not process isolation.
+- OpenClaw approvals, sandbox, gateway protocol, `/tools/invoke`, and pairing
+  docs, as runtime-boundary references. These controls complement VMGA but do
+  not replace VMGA proposal-bound approval.
 
 ## Non-Goals
 

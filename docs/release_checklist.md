@@ -11,6 +11,13 @@ Before making VMGA public:
   compliance certification, or hard isolation without deployment preconditions.
 - For OpenClaw examples, capture `openclaw security audit --deep` and
   `openclaw secrets audit --check` output.
+- Capture `openclaw sandbox explain --json` and effective exec approvals for
+  mailbox-capable agents.
+- If sandbox or OpenShell policy changes, recreate affected runtimes and capture
+  the post-recreate sandbox list.
+- Verify `/tools/invoke` cannot call non-VMGA Gmail/Workspace write paths.
+- Verify node pairing and node command policy do not expose mailbox side effects
+  outside VMGA.
 - If OpenClaw SecretRefs are migrated, retain the redacted `openclaw secrets
   apply` plan and `openclaw secrets reload` result.
 - If trusted-proxy auth is documented or enabled, verify the proxy authenticates

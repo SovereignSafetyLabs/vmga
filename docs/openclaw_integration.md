@@ -24,6 +24,9 @@ The OpenClaw path must:
   channel exposure, tool profiles, plugin enablement, or sandbox policy.
 - Run `openclaw secrets audit --check` after credential migration and before
   claiming a hard VMGA enforcement boundary.
+- Treat OpenClaw exec approvals, node pairing, Gateway auth, and `/tools/invoke`
+  as separate OpenClaw controls. None of them replaces VMGA's proposal hash,
+  approval binding, Gmail executor isolation, or evidence requirements.
 
 See `docs/deployment_runbook.md` for bypass-closure requirements.
 
@@ -91,6 +94,73 @@ shell, minimal environment allowlists, output limits, timeouts, and trusted
 directories only when needed for known package-manager symlinks. A compromised
 resolver path is equivalent to a compromised secret source.
 
+## Gateway Protocol And Tool Invocation
+
+OpenClaw's Gateway WebSocket protocol is the control plane and node transport.
+Clients connect with a role and scopes during the first `connect` frame, and the
+Gateway reports negotiated role/scopes in the `hello-ok` response. VMGA should
+record the relevant OpenClaw actor, role, session key, tool name, and request
+correlation identifiers in VMGA evidence, but it must not treat those fields as
+approval authority by themselves.
+
+The HTTP `POST /tools/invoke` endpoint is always enabled and uses Gateway auth
+plus tool policy. For VMGA deployments, treat this endpoint as a full
+operator-access surface for the gateway:
+
+- Shared gateway token/password bearer auth is an owner/operator credential, not
+  a narrow per-user Gmail permission.
+- Shared-secret auth can restore broad default operator scopes even if a caller
+  supplies a narrower scope header.
+- Direct tool invokes should remain on loopback, tailnet, or private ingress.
+- Public internet exposure requires an identity-aware proxy and the trusted-proxy
+  checks described above.
+- If Gmail, Workspace, shell, filesystem, browser, or plugin-owned write tools
+  are reachable through `/tools/invoke`, they are VMGA bypass candidates unless
+  they emit VMGA proposals and pass through VMGA execution.
+
+OpenClaw returns 404 when policy denies a tool through this endpoint. VMGA
+deployment evidence should include at least one denied direct invocation for a
+non-VMGA Gmail write path.
+
+## Exec Approvals, Sandbox, And Pairing
+
+OpenClaw exec approvals are operator guardrails for shell execution; they are
+not VMGA approval. A VMGA approval must still be out-of-band, proposal-bound,
+non-replayable, and verified by VMGA before a Gmail side effect occurs.
+
+For OpenClaw exec policy:
+
+- Keep host exec denied for exposed VMGA agents.
+- Do not use YOLO-style `security: "full"` plus `ask: "off"` for mailbox-capable
+  agents.
+- Treat the host approvals file as the enforceable source of truth for exec
+  approvals, and keep requested `tools.exec.*` policy aligned with it.
+- If any exec surface is reachable through `/tools/invoke`, assume shell-level
+  mutation is possible even if file-write tools are denied.
+
+For sandbox policy:
+
+- Prefer sandbox mode for non-main or all mailbox-capable agents.
+- Use `openclaw sandbox explain --json` to capture effective sandbox mode,
+  backend, scope, workspace access, sandbox tool policy, and elevated gates.
+- After changing Docker, SSH, OpenShell source, OpenShell policy, sandbox mode,
+  or setup commands, run `openclaw sandbox recreate` for the affected scope
+  before claiming the new policy is active.
+- Record `openclaw sandbox list --json` or equivalent runtime evidence after
+  recreation.
+
+For node pairing:
+
+- Pairing establishes node trust and issues/rotates node tokens; it does not pin
+  the live command surface for a node.
+- Live node commands come from what the node declares on connect after global
+  node command policy is applied.
+- Node `system.run` and related exec commands require stronger operator scopes
+  during pairing approval, but VMGA must still deny Gmail side effects unless
+  they pass through VMGA.
+- Paired nodes that can reach Gmail/Workspace credentials, local browser
+  profiles, or direct Workspace CLIs are part of the VMGA bypass surface.
+
 ## VMGA Bypass Controls For OpenClaw
 
 The deployment is hard-enforced only if OpenClaw cannot reach Gmail side effects
@@ -109,6 +179,10 @@ without VMGA. Deny or remove these from the agent runtime:
 - Network egress from the agent sandbox directly to Gmail/Workspace APIs when
   write-capable credentials are present.
 - Plugin-owned tools that expose Gmail writes without emitting VMGA proposals.
+- `/tools/invoke` access to Gmail, Workspace, shell, filesystem, browser, node,
+  or plugin-owned write tools that can mutate mailbox state outside VMGA.
+- Paired node commands or host exec allowlists that can invoke direct mailbox
+  write paths.
 
 If any of those paths remain reachable, document the deployment as advisory
 governance only.
@@ -144,12 +218,20 @@ Before exposing an OpenClaw VMGA deployment:
 2. Run `openclaw security audit --deep`.
 3. Run `openclaw secrets audit --check`.
 4. If secrets changed, run `openclaw secrets reload` and record the result.
-5. Prove an authorized sender can trigger a VMGA proposal.
-6. Prove an unauthorized sender or browser session is denied.
-7. Prove direct Gmail writes through non-VMGA tools fail.
-8. Confirm approval-gated actions still require VMGA approval.
-9. Confirm logs redact tokens and message secrets.
-10. Record all accepted residual warnings.
+5. Run `openclaw sandbox explain --json` for mailbox-capable agents.
+6. If sandbox config changed, run `openclaw sandbox recreate` for the affected
+   scope and record `openclaw sandbox list --json`.
+7. Run `openclaw approvals get --gateway --json` or the relevant node/local
+   approvals command and record the effective exec posture.
+8. Prove an authorized sender can trigger a VMGA proposal.
+9. Prove an unauthorized sender or browser session is denied.
+10. Prove direct Gmail writes through non-VMGA tools fail, including through
+    `/tools/invoke` when that endpoint is reachable in the deployment.
+11. Confirm approval-gated actions still require VMGA approval, not merely
+    OpenClaw exec approval.
+12. Confirm paired nodes cannot expose Gmail side effects outside VMGA.
+13. Confirm logs redact tokens and message secrets.
+14. Record all accepted residual warnings.
 
 VMGA release evidence should include the audit output, gateway configuration
 hash, plugin manifest hash, policy hash, and representative VMGA evidence
@@ -200,6 +282,13 @@ layer.
   https://docs.openclaw.ai/gateway/trusted-proxy-auth
 - OpenClaw SecretRef Credential Surface:
   https://docs.openclaw.ai/reference/secretref-credential-surface
+- OpenClaw Approvals CLI: https://docs.openclaw.ai/cli/approvals
+- OpenClaw Sandbox CLI: https://docs.openclaw.ai/cli/sandbox
+- OpenClaw Gateway Protocol: https://docs.openclaw.ai/gateway/protocol
+- OpenClaw Tools Invoke API:
+  https://docs.openclaw.ai/gateway/tools-invoke-http-api
+- OpenClaw Gateway-Owned Pairing:
+  https://docs.openclaw.ai/gateway/pairing
 - OpenClaw Formal Verification:
   https://docs.openclaw.ai/security/formal-verification
 - OpenClaw MITRE ATLAS Threat Model:

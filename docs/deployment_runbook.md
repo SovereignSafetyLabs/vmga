@@ -26,6 +26,8 @@ Before exposing an OpenClaw-backed VMGA deployment, run:
 openclaw doctor
 openclaw security audit --deep
 openclaw secrets audit --check
+openclaw sandbox explain --json
+openclaw approvals get --gateway --json
 openclaw health
 ```
 
@@ -35,6 +37,18 @@ Gmail write paths are denied. If `openclaw secrets apply` or
 `openclaw secrets reload` is part of the deployment, keep the plan and reload
 result in release evidence. See `docs/openclaw_integration.md` for the detailed
 OpenClaw checklist.
+
+If sandbox configuration, OpenShell policy, SSH sandbox auth, Docker image,
+backend, mode, or setup commands change, recreate the affected sandbox runtimes
+with `openclaw sandbox recreate` before treating the new policy as active.
+
+Treat OpenClaw `/tools/invoke` as a gateway operator surface. A deployment must
+prove that direct mailbox write tools cannot be invoked through it unless they
+emit VMGA proposals and pass through VMGA execution.
+
+OpenClaw exec approvals and node pairing are not substitutes for VMGA approval.
+VMGA approval remains proposal-bound, non-replayable, and verified by VMGA before
+any Gmail side effect.
 
 SecretRefs are useful but do not isolate secrets from an agent that can read
 files or execute commands in the same authority context. If plaintext
