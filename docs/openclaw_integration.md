@@ -143,11 +143,36 @@ For sandbox policy:
 - Prefer sandbox mode for non-main or all mailbox-capable agents.
 - Use `openclaw sandbox explain --json` to capture effective sandbox mode,
   backend, scope, workspace access, sandbox tool policy, and elevated gates.
+- Treat sandbox mode, tool policy, and elevated mode as separate controls:
+  sandboxing decides where tools run; tool policy decides which tools are
+  callable; elevated is an exec-only path that runs outside the sandbox.
+- Deny elevated exec for mailbox-capable agents unless the deployment has a
+  documented break-glass reason and proves the elevated path cannot reach Gmail
+  side effects outside VMGA.
+- Deny `group:runtime` as well as mutating filesystem tools for read-only
+  mailbox agents. If `exec` is allowed, denying `write`, `edit`, and
+  `apply_patch` does not make shell execution read-only.
 - After changing Docker, SSH, OpenShell source, OpenShell policy, sandbox mode,
   or setup commands, run `openclaw sandbox recreate` for the affected scope
   before claiming the new policy is active.
 - Record `openclaw sandbox list --json` or equivalent runtime evidence after
   recreation.
+- Review Docker bind mounts and workspace access independently. Bind mounts
+  pierce the sandbox filesystem, default to read-write when mode is omitted, and
+  must not expose credential roots, Docker sockets, home config directories, or
+  VMGA state/evidence paths to the agent.
+
+For OpenShell:
+
+- Choose `mirror` when the local workspace should remain canonical and sync
+  before/after exec is acceptable.
+- Choose `remote` when the remote OpenShell workspace should become canonical
+  after initial seed.
+- Record the selected `plugins.entries.openshell.config.mode`, `policy`,
+  `providers`, `gpu`, and gateway settings in deployment evidence.
+- In `remote` mode, host edits after the initial seed are not visible until
+  `openclaw sandbox recreate` re-seeds the workspace.
+- Recreate after changing OpenShell backend, source, mode, or policy settings.
 
 For node pairing:
 
@@ -160,6 +185,41 @@ For node pairing:
   they pass through VMGA.
 - Paired nodes that can reach Gmail/Workspace credentials, local browser
   profiles, or direct Workspace CLIs are part of the VMGA bypass surface.
+
+## Operator Scopes And File Safety
+
+Operator scopes are OpenClaw control-plane guardrails inside one trusted Gateway
+operator domain. They do not create hostile multi-tenant separation. For VMGA:
+
+- `operator.write` can invoke tools and relay node commands, so treat it as
+  mailbox-relevant when any Gmail-capable tool is reachable.
+- `operator.admin` can mutate configuration, approve high-risk access, and
+  satisfy every operator scope. Keep admin-scoped sessions away from
+  mailbox-capable shared workflows.
+- `operator.approvals` covers OpenClaw exec/plugin approval APIs, not VMGA Gmail
+  approval.
+- `operator.talk.secrets` can read Talk configuration with secrets included; do
+  not expose it to agents that should not see secrets.
+- Shared gateway token/password auth is trusted operator access for the whole
+  Gateway. Use separate Gateways for real trust-boundary separation.
+
+OpenClaw fs-safe protects trusted OpenClaw code handling untrusted paths with
+root-bounded access, atomic writes, symlink/hardlink defenses on selected APIs,
+byte limits, and private modes for supported secret/state files. It is not a
+sandbox and does not replace OS users, containers, tool policy, or VMGA executor
+isolation.
+
+For VMGA deployments:
+
+- Do not rely on fs-safe alone when the threat includes hostile local users or an
+  agent with filesystem/shell access in the same authority context.
+- Prefer OpenClaw plugin SDK file helpers for plugin-facing paths rather than
+  raw filesystem calls.
+- If POSIX same-UID path-race hardening is part of the security posture, use
+  `OPENCLAW_FS_SAFE_PYTHON_MODE=require`; `auto` can fall back to Node-only
+  behavior.
+- VMGA state, approval verifier secrets, Gmail credentials, and evidence logs
+  should remain outside agent-readable roots regardless of fs-safe settings.
 
 ## VMGA Bypass Controls For OpenClaw
 
@@ -183,6 +243,10 @@ without VMGA. Deny or remove these from the agent runtime:
   or plugin-owned write tools that can mutate mailbox state outside VMGA.
 - Paired node commands or host exec allowlists that can invoke direct mailbox
   write paths.
+- Elevated exec paths for mailbox-capable agents.
+- Docker, browser, SSH, or OpenShell mounts that expose VMGA state, Gmail
+  credentials, home credential roots, browser profiles, Docker sockets, or
+  OpenClaw config/auth material.
 
 If any of those paths remain reachable, document the deployment as advisory
 governance only.
@@ -221,17 +285,19 @@ Before exposing an OpenClaw VMGA deployment:
 5. Run `openclaw sandbox explain --json` for mailbox-capable agents.
 6. If sandbox config changed, run `openclaw sandbox recreate` for the affected
    scope and record `openclaw sandbox list --json`.
-7. Run `openclaw approvals get --gateway --json` or the relevant node/local
+7. Inspect sandbox tool policy, elevated gates, bind mounts, workspace access,
+   and OpenShell mode/policy in the captured sandbox evidence.
+8. Run `openclaw approvals get --gateway --json` or the relevant node/local
    approvals command and record the effective exec posture.
-8. Prove an authorized sender can trigger a VMGA proposal.
-9. Prove an unauthorized sender or browser session is denied.
-10. Prove direct Gmail writes through non-VMGA tools fail, including through
+9. Prove an authorized sender can trigger a VMGA proposal.
+10. Prove an unauthorized sender or browser session is denied.
+11. Prove direct Gmail writes through non-VMGA tools fail, including through
     `/tools/invoke` when that endpoint is reachable in the deployment.
-11. Confirm approval-gated actions still require VMGA approval, not merely
+12. Confirm approval-gated actions still require VMGA approval, not merely
     OpenClaw exec approval.
-12. Confirm paired nodes cannot expose Gmail side effects outside VMGA.
-13. Confirm logs redact tokens and message secrets.
-14. Record all accepted residual warnings.
+13. Confirm paired nodes cannot expose Gmail side effects outside VMGA.
+14. Confirm logs redact tokens and message secrets.
+15. Record all accepted residual warnings.
 
 VMGA release evidence should include the audit output, gateway configuration
 hash, plugin manifest hash, policy hash, and representative VMGA evidence
@@ -284,6 +350,14 @@ layer.
   https://docs.openclaw.ai/reference/secretref-credential-surface
 - OpenClaw Approvals CLI: https://docs.openclaw.ai/cli/approvals
 - OpenClaw Sandbox CLI: https://docs.openclaw.ai/cli/sandbox
+- OpenClaw Sandboxing: https://docs.openclaw.ai/gateway/sandboxing
+- OpenClaw OpenShell: https://docs.openclaw.ai/gateway/openshell
+- OpenClaw Sandbox vs Tool Policy vs Elevated:
+  https://docs.openclaw.ai/gateway/sandbox-vs-tool-policy-vs-elevated
+- OpenClaw Operator Scopes:
+  https://docs.openclaw.ai/gateway/operator-scopes
+- OpenClaw Secure File Operations:
+  https://docs.openclaw.ai/gateway/security/secure-file-operations
 - OpenClaw Gateway Protocol: https://docs.openclaw.ai/gateway/protocol
 - OpenClaw Tools Invoke API:
   https://docs.openclaw.ai/gateway/tools-invoke-http-api

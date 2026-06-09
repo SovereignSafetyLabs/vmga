@@ -41,6 +41,15 @@ OpenClaw checklist.
 If sandbox configuration, OpenShell policy, SSH sandbox auth, Docker image,
 backend, mode, or setup commands change, recreate the affected sandbox runtimes
 with `openclaw sandbox recreate` before treating the new policy as active.
+Capture the effective sandbox mode, backend, scope, workspace access, sandbox
+tool policy, elevated gates, bind mounts, and OpenShell mode/policy where
+applicable.
+
+Sandboxing, tool policy, and elevated mode are separate controls. Sandboxing
+decides where tools run, tool policy decides what is callable, and elevated mode
+is an exec-only path outside the sandbox. A hard VMGA deployment should deny
+elevated exec for mailbox-capable agents and prove `exec` cannot mutate Gmail
+state outside VMGA.
 
 Treat OpenClaw `/tools/invoke` as a gateway operator surface. A deployment must
 prove that direct mailbox write tools cannot be invoked through it unless they
@@ -55,6 +64,11 @@ files or execute commands in the same authority context. If plaintext
 credentials, OAuth refresh material, copied configs, backups, generated model
 catalogs, or unsupported credential classes remain readable by the agent,
 describe the deployment as advisory.
+
+OpenClaw fs-safe and secure file helpers are guardrails for trusted OpenClaw code
+handling untrusted paths; they are not a sandbox. VMGA state, evidence, Gmail
+credentials, browser profiles, Docker sockets, and OpenClaw config/auth material
+must stay outside any agent-readable or sandbox-mounted path.
 
 ## Advisory Mode
 

@@ -64,6 +64,9 @@ pytest -q
 - OpenClaw approvals, sandbox, gateway protocol, `/tools/invoke`, and pairing
   docs, as runtime-boundary references. These controls complement VMGA but do
   not replace VMGA proposal-bound approval.
+- OpenClaw sandboxing, OpenShell, tool policy/elevated, operator-scope, and
+  secure-file-operation docs, as isolation and file-safety references. These are
+  deployment controls, not proof that VMGA is enforced by themselves.
 
 ## Non-Goals
 

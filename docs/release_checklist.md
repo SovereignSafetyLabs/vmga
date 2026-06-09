@@ -15,9 +15,17 @@ Before making VMGA public:
   mailbox-capable agents.
 - If sandbox or OpenShell policy changes, recreate affected runtimes and capture
   the post-recreate sandbox list.
+- Review sandbox mode, backend, scope, workspace access, sandbox tool policy,
+  elevated gates, bind mounts, and OpenShell mode/policy for mailbox-capable
+  agents.
+- Verify elevated exec is disabled for mailbox-capable agents or documented as a
+  break-glass exception with bypass evidence.
 - Verify `/tools/invoke` cannot call non-VMGA Gmail/Workspace write paths.
 - Verify node pairing and node command policy do not expose mailbox side effects
   outside VMGA.
+- Verify VMGA state, evidence, Gmail credentials, browser profiles, Docker
+  sockets, and OpenClaw config/auth material are not exposed through sandbox bind
+  mounts or agent-readable paths.
 - If OpenClaw SecretRefs are migrated, retain the redacted `openclaw secrets
   apply` plan and `openclaw secrets reload` result.
 - If trusted-proxy auth is documented or enabled, verify the proxy authenticates
