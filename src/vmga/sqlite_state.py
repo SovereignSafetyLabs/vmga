@@ -1,0 +1,143 @@
+"""SQLite-backed VMGA state store.
+
+This implements the same public methods as the JSON VMGAStateStore while using
+SQLite transactions for durable approval consumption and restart behavior.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+from .vmga_adapter import ApprovalRecord, VMGAProposal
+
+
+class SQLiteStateStore:
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = Path(db_path or "~/.vmga_state/vmga.sqlite3").expanduser()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    def _init_db(self) -> None:
+        with self._connect() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS pending_proposals (
+                  proposal_id TEXT PRIMARY KEY,
+                  payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS approvals (
+                  proposal_id TEXT PRIMARY KEY,
+                  payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS rate_limit_state (
+                  attempt_key TEXT PRIMARY KEY,
+                  payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS lockdown_state (
+                  id INTEGER PRIMARY KEY CHECK (id = 1),
+                  lockdown_active INTEGER NOT NULL,
+                  denial_counts TEXT NOT NULL
+                );
+                """
+            )
+
+    def save_pending_proposals(self, proposals: Dict[str, VMGAProposal], proposal_ttl_seconds: int = 86400) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM pending_proposals")
+            conn.executemany(
+                "INSERT INTO pending_proposals (proposal_id, payload) VALUES (?, ?)",
+                [(pid, json.dumps(prop.to_dict(), sort_keys=True)) for pid, prop in proposals.items()],
+            )
+
+    def load_pending_proposals(self, proposal_ttl_seconds: int = 86400) -> Dict[str, VMGAProposal]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT proposal_id, payload FROM pending_proposals").fetchall()
+        return {row["proposal_id"]: VMGAProposal.from_dict(json.loads(row["payload"])) for row in rows}
+
+    def save_approvals(self, approvals: Dict[str, ApprovalRecord]) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM approvals")
+            conn.executemany(
+                "INSERT INTO approvals (proposal_id, payload) VALUES (?, ?)",
+                [(pid, json.dumps(app.to_dict(), sort_keys=True)) for pid, app in approvals.items()],
+            )
+
+    def load_approvals(self) -> Dict[str, ApprovalRecord]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT proposal_id, payload FROM approvals").fetchall()
+        return {row["proposal_id"]: ApprovalRecord.from_dict(json.loads(row["payload"])) for row in rows}
+
+    def save_rate_limit_state(self, failed_attempts: Dict[str, Dict[str, Any]]) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM rate_limit_state")
+            conn.executemany(
+                "INSERT INTO rate_limit_state (attempt_key, payload) VALUES (?, ?)",
+                [(key, json.dumps(value, sort_keys=True)) for key, value in failed_attempts.items()],
+            )
+
+    def load_rate_limit_state(self, lockout_duration_seconds: int = 3600) -> Dict[str, Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT attempt_key, payload FROM rate_limit_state").fetchall()
+        return {row["attempt_key"]: json.loads(row["payload"]) for row in rows}
+
+    def save_lockdown_state(self, lockdown_active: bool, denial_counts: Dict[str, int]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO lockdown_state (id, lockdown_active, denial_counts)
+                VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                  lockdown_active=excluded.lockdown_active,
+                  denial_counts=excluded.denial_counts
+                """,
+                (1 if lockdown_active else 0, json.dumps(denial_counts, sort_keys=True)),
+            )
+
+    def load_lockdown_state(self) -> Tuple[bool, Dict[str, int], bool]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT lockdown_active, denial_counts FROM lockdown_state WHERE id = 1").fetchone()
+        if row is None:
+            return False, {}, False
+        return bool(row["lockdown_active"]), json.loads(row["denial_counts"]), False
+
+    def load_all_state(
+        self,
+        proposal_ttl_seconds: int = 86400,
+        fail_closed: bool = False,
+        max_state_size_bytes: int = 10_000_000,
+    ) -> Dict[str, Any]:
+        try:
+            lockdown_active, denial_counts, corrupted = self.load_lockdown_state()
+            return {
+                "pending_proposals": self.load_pending_proposals(proposal_ttl_seconds),
+                "approvals": self.load_approvals(),
+                "lockdown_active": lockdown_active,
+                "denial_counts": denial_counts,
+                "corrupted": corrupted,
+            }
+        except Exception:
+            if fail_closed:
+                return {
+                    "pending_proposals": {},
+                    "approvals": {},
+                    "lockdown_active": True,
+                    "denial_counts": {},
+                    "corrupted": True,
+                }
+            return {
+                "pending_proposals": {},
+                "approvals": {},
+                "lockdown_active": False,
+                "denial_counts": {},
+                "corrupted": True,
+            }

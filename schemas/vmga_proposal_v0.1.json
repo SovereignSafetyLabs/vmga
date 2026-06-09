@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vmga.example/schemas/vmga_proposal_v0.1.json",
+  "title": "VMGA Proposal",
+  "type": "object",
+  "required": ["schema_version", "proposal_id", "action", "actor_id", "requested_at"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "proposal_id": { "type": "string", "minLength": 1 },
+    "proposal_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "action": {
+      "enum": ["read", "summarize", "classify", "extract_entities", "recommend_draft", "create_draft", "send", "forward", "archive", "delete", "apply_label", "download_attachment", "mark_read", "move"]
+    },
+    "actor_id": { "type": "string", "minLength": 1 },
+    "thread_id": { "type": ["string", "null"] },
+    "message_ids": { "type": "array", "items": { "type": "string" } },
+    "content": { "type": ["string", "null"] },
+    "recipients": { "type": "array", "items": { "type": "string" } },
+    "attachment_ids": { "type": "array", "items": { "type": "string" } },
+    "justification": { "type": "string" },
+    "requested_at": { "type": "string" }
+  }
+}

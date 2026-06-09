@@ -1,0 +1,53 @@
+version: 1.0.0
+description: OpenClaw gateway example that routes Gmail actions through VMGA.
+
+gateway:
+  bind_host: 127.0.0.1
+  bind_port: 8443
+  enable_gateway_websocket: true
+
+vmga:
+  broker_url: https://vmga.example.invalid
+  proposal_endpoint: /v1/proposals
+  timeout_seconds: 2.5
+
+runtime:
+  policy_path: runtime/policy.yaml
+  ledger_path: artifacts/openclaw_ledger.jsonl
+  autonomy_level: L3_SCOPED_EXEC
+  integrity_mode: true
+  plugin_enablement:
+    - plugin_id: plugin.vmga
+      plugin_path: integrations/openclaw
+
+tools:
+  route_map:
+    mail_search:
+      vmga_action: read
+    mail_get:
+      vmga_action: read
+    mail_get_attachment:
+      vmga_action: download_attachment
+    mail_create_draft:
+      vmga_action: create_draft
+    mail_send:
+      vmga_action: send
+
+security:
+  deny_tool_prefixes:
+    - gmail
+    - gws
+    - workspace
+    - terminal
+    - browser
+    - node.
+    - exec
+  deny_exact_tools:
+    - gws
+    - gog
+    - gmail
+    - workspace_cli
+
+static_metadata:
+  route_blocked_to_bypass: true
+  route_only_through_broker: true

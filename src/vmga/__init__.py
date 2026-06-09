@@ -8,19 +8,31 @@ from .vmga_adapter import (
     VMGAGmailAdapter,
     VMGAPolicy,
     VMGAProposal,
+    VMGAStateStore,
     GmailAction,
     ActionClass,
     ContentRisk,
+    ApprovalRecord,
     load_vmga_policy,
 )
+from .backends import FakeGmailBackend
+from .broker import VMGABroker
+from .executor import VMGAExecutor
+from .sqlite_state import SQLiteStateStore
 
 __all__ = [
     "VMGAGmailAdapter",
     "VMGAPolicy", 
     "VMGAProposal",
+    "VMGAStateStore",
     "GmailAction",
     "ActionClass",
     "ContentRisk",
+    "ApprovalRecord",
+    "FakeGmailBackend",
+    "SQLiteStateStore",
+    "VMGABroker",
+    "VMGAExecutor",
     "load_vmga_policy",
 ]
 

@@ -23,6 +23,12 @@ dependencies = [
 dev = [
   "pytest>=8.0"
 ]
+broker = []
+sqlite = []
+gogcli = []
+
+[project.scripts]
+vmga-verify-evidence = "vmga.cli:verify_evidence_main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

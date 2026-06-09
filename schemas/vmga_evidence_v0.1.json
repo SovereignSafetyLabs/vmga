@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vmga.example/schemas/vmga_evidence_v0.1.json",
+  "title": "VMGA Evidence Event",
+  "type": "object",
+  "required": ["event_type", "timestamp"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": { "type": "string" },
+    "event_type": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "proposal_id": { "type": ["string", "null"] },
+    "proposal_hash": { "type": ["string", "null"] },
+    "error_code": { "type": ["string", "null"] },
+    "rule_id": { "type": ["string", "null"] },
+    "vesta_rule_id": { "type": ["string", "null"] }
+  }
+}

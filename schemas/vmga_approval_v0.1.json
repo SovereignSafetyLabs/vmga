@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vmga.example/schemas/vmga_approval_v0.1.json",
+  "title": "VMGA Approval",
+  "type": "object",
+  "required": ["schema_version", "proposal_id", "proposal_hash", "approver_id", "approved_at", "expires_at"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "proposal_id": { "type": "string" },
+    "proposal_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "approver_id": { "type": "string" },
+    "approved_at": { "type": "string" },
+    "expires_at": { "type": "string" },
+    "used": { "type": "boolean" },
+    "approval_token_hash": { "type": "string" },
+    "binding_hash": { "type": "string" }
+  }
+}

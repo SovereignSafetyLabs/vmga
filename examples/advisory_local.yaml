@@ -1,0 +1,27 @@
+# VMGA advisory example
+# Non-production reference config.
+
+vmga_mode: advisory
+profile: observe_only
+policy_file: ../policies/observe_only.yaml
+claim_boundary: advisory_governance
+
+gmail:
+  backend: local
+  mailbox: inbox@example.com
+  allowed_domains:
+    - example.com
+
+credentials:
+  approval_secret_source: external-credential-service
+  gmail_token_source: external-credential-service
+
+evidence:
+  ledger_path: ./artifacts/vmga-evidence
+  release_bundle: ./artifacts/release-bundle
+
+notes: |
+  This example is safe to publish and uses placeholder values only.
+  VMGA does not claim prompt-injection prevention, DLP, host compromise
+  protection, browser/session isolation, compliance certification, or security
+  of Hermes/OpenClaw internals.

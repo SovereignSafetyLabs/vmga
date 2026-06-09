@@ -1,0 +1,21 @@
+example_name: vmga-hermes-mail
+description: Hermes static example using VMGA broker-backed mail tools
+hermes_plugin:
+  plugin_dir: integrations/hermes
+  plugin_names:
+    - vmga-mail
+  required_env:
+    - VMGA_BROKER_URL
+  broker_default:
+    url: https://vmga.example.invalid
+    endpoint: /v1/proposals
+    timeout_seconds: 2.5
+hermes_tools:
+  - mail_search
+  - mail_get
+  - mail_get_attachment
+  - mail_create_draft
+  - mail_send
+guardrails:
+  allow_only_vmga_mail_tools: true
+  deny_direct_native_gmail_paths: true

@@ -1,0 +1,31 @@
+# VMGA broker example
+# Placeholder broker config for offline review and release scaffolding.
+
+vmga_mode: broker
+profile: scoped_execution
+policy_file: ../policies/scoped_execution.yaml
+claim_boundary: brokered_governance
+
+broker:
+  host: 127.0.0.1
+  port: 8088
+  transport: loopback
+  public_url: https://broker.example.invalid
+
+gmail:
+  backend: external-service
+  mailbox: ops@example.com
+  allowed_domains:
+    - example.com
+
+credentials:
+  approval_secret_source: external-credential-service
+  gmail_token_source: external-credential-service
+
+approval:
+  out_of_band: true
+  ttl_seconds: 3600
+
+notes: |
+  Replace example values before deployment.
+  This file is intentionally free of live credentials and token material.

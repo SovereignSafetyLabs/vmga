@@ -1,0 +1,13 @@
+name: vmga-mail
+version: 1.0.0
+description: VMGA-backed mailbox tools for Hermes
+provides_tools:
+  - mail_search
+  - mail_get
+  - mail_get_attachment
+  - mail_create_draft
+  - mail_send
+requires_env:
+  - name: VMGA_BROKER_URL
+    description: Base URL for the VMGA broker (for example, https://vmga.example.invalid)
+    secret: false
