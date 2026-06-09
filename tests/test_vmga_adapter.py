@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import pytest
 from vmga.vmga_adapter import (
     VMGAProposal, VMGAPolicy, VMGAGmailAdapter, VMGAStateStore,
-    GmailAction, ActionClass, ContentRisk, ApprovalRecord
+    GmailAction, ActionClass, ContentRisk, ApprovalRecord, load_vmga_policy
 )
 
 
@@ -142,6 +142,33 @@ class TestVMGAPolicy:
         assert GmailAction.from_string("invalid") is None
         assert GmailAction.from_string("CREATE_DRAFT") == GmailAction.CREATE_DRAFT
 
+    def test_unknown_policy_field_rejected(self):
+        with pytest.raises(ValueError, match="Unknown VMGA policy field"):
+            VMGAPolicy("test", {"allowed_actions": ["read"], "silent_allow_send": True})
+
+    def test_unknown_nested_policy_field_rejected(self):
+        with pytest.raises(ValueError, match="under 'draft_policy'"):
+            VMGAPolicy("test", {"draft_policy": {"max_length": 100, "approve_later": True}})
+
+    def test_unknown_policy_action_rejected(self):
+        with pytest.raises(ValueError, match="Unknown VMGA action"):
+            VMGAPolicy("test", {"allowed_actions": ["read", "send_everything"]})
+
+    def test_policy_decision_has_stable_error_code(self):
+        policy = VMGAPolicy("test", {"allowed_actions": ["read"]})
+        proposal = VMGAProposal(proposal_id="prop_1", action=GmailAction.SEND, actor_id="agent_1")
+        decision = policy.evaluate(proposal, ContentRisk())
+        assert decision.allowed == False
+        assert decision.rule_id == "vmga_not_allowed"
+        assert decision.error_code == "vmga_not_allowed"
+
+    def test_policy_loader_validates_yaml(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            policy_path = Path(tmpdir) / "bad_policy.yaml"
+            policy_path.write_text("allowed_actions: [read]\nsilent_allow_send: true\n")
+            with pytest.raises(ValueError, match="Unknown VMGA policy field"):
+                load_vmga_policy(str(policy_path))
+
 
 class MockVesta:
     def __init__(self):
@@ -198,6 +225,7 @@ class TestVMGAGmailAdapter:
             result = adapter.propose_action(action="invalid_action_xyz", actor_id="agent_1")
             assert result["status"] == "DENY"
             assert result["rule_id"] == "vmga_invalid_action"
+            assert result["error_code"] == "vmga_invalid_action"
     
     def test_approve_proposal_binding(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -216,7 +244,62 @@ class TestVMGAGmailAdapter:
             approval = adapter.approve_proposal(proposal_id, approver_id="operator_1", approval_token=token)
             assert approval["status"] == "APPROVED"
             assert approval["proposal_hash"] == proposal_hash
+            record = adapter.approvals[proposal_id]
+            assert record.actor_id == "agent_1"
+            assert record.action == "create_draft"
+            assert record.binding_hash == record.expected_binding_hash()
             assert any(e["event_type"] == "vmga_proposal_approved" for e in adapter.vesta.audit_ledger.events)
+
+    def test_expired_approval_rejected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = VMGAGmailAdapter(
+                vesta_adapter=MockVesta(), profile="draft_assist",
+                policy_rules={"allowed_actions": ["create_draft"], "kinetic_requires_approval": True},
+                state_store=VMGAStateStore(tmpdir), approval_secret="test_secret"
+            )
+            result = adapter.propose_action(action="create_draft", actor_id="agent_1", content="Draft", justification="Test")
+            proposal_id = result["proposal_id"]
+            proposal_hash = result["proposal_hash"]
+            token = adapter.compute_approval_token(proposal_id, proposal_hash, "operator_1")
+            adapter.approve_proposal(proposal_id, approver_id="operator_1", approval_token=token)
+
+            expired_at = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+            approval = adapter.approvals[proposal_id]
+            approval.expires_at = expired_at
+            approval.binding_hash = approval.expected_binding_hash()
+
+            exec_result = adapter.execute_approved(proposal_id, proposal_hash, token, lambda x: x)
+            assert exec_result["status"] == "DENY"
+            assert exec_result["error_code"] == "vmga_approval_expired"
+
+    def test_tampered_approval_binding_rejected_after_restart(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = VMGAGmailAdapter(
+                vesta_adapter=MockVesta(), profile="draft_assist",
+                policy_rules={"allowed_actions": ["create_draft"], "kinetic_requires_approval": True},
+                state_store=VMGAStateStore(tmpdir), approval_secret="test_secret"
+            )
+            result = adapter.propose_action(
+                action="create_draft", actor_id="agent_1", thread_id="thread_123",
+                content="Draft", recipients=["client@company.com"], justification="Test"
+            )
+            proposal_id = result["proposal_id"]
+            proposal_hash = result["proposal_hash"]
+            token = adapter.compute_approval_token(proposal_id, proposal_hash, "operator_1")
+            adapter.approve_proposal(proposal_id, approver_id="operator_1", approval_token=token)
+
+            approval = adapter.approvals[proposal_id]
+            approval.action = "send"
+            adapter._save_state()
+
+            restarted = VMGAGmailAdapter(
+                vesta_adapter=MockVesta(), profile="draft_assist",
+                policy_rules={"allowed_actions": ["create_draft"], "kinetic_requires_approval": True},
+                state_store=VMGAStateStore(tmpdir), approval_secret="test_secret"
+            )
+            exec_result = restarted.execute_approved(proposal_id, proposal_hash, token, lambda x: x)
+            assert exec_result["status"] == "DENY"
+            assert exec_result["error_code"] == "vmga_approval_binding_mismatch"
     
     def test_approve_without_token_fails(self):
         """Approval without token is rejected in strict mode."""

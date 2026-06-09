@@ -173,6 +173,77 @@ class ApprovalRecord:
     expires_at: str
     used: bool = False
     approval_token_hash: str = ""  # Hash of token (token itself never stored)
+    actor_id: str = ""
+    action: str = ""
+    thread_id: Optional[str] = None
+    message_ids: List[str] = field(default_factory=list)
+    recipients: List[str] = field(default_factory=list)
+    binding_hash: str = ""
+
+    @staticmethod
+    def compute_binding_hash(
+        proposal_id: str, proposal_hash: str, approver_id: str, actor_id: str,
+        action: str, thread_id: Optional[str], message_ids: List[str],
+        recipients: List[str], expires_at: str,
+    ) -> str:
+        data = {
+            "proposal_id": proposal_id,
+            "proposal_hash": proposal_hash,
+            "approver_id": approver_id,
+            "actor_id": actor_id,
+            "action": action,
+            "thread_id": thread_id,
+            "message_ids": sorted(message_ids),
+            "recipients": sorted(recipients),
+            "expires_at": expires_at,
+        }
+        payload = json.dumps(data, sort_keys=True, separators=(',', ':'))
+        return f"sha256:{hashlib.sha256(payload.encode()).hexdigest()}"
+
+    @classmethod
+    def from_proposal(
+        cls, proposal: VMGAProposal, proposal_hash: str, approver_id: str,
+        approved_at: str, expires_at: str, approval_token_hash: str,
+    ) -> "ApprovalRecord":
+        binding_hash = cls.compute_binding_hash(
+            proposal_id=proposal.proposal_id,
+            proposal_hash=proposal_hash,
+            approver_id=approver_id,
+            actor_id=proposal.actor_id,
+            action=proposal.action.value,
+            thread_id=proposal.thread_id,
+            message_ids=proposal.message_ids,
+            recipients=proposal.recipients,
+            expires_at=expires_at,
+        )
+        return cls(
+            proposal_id=proposal.proposal_id,
+            proposal_hash=proposal_hash,
+            approver_id=approver_id,
+            approved_at=approved_at,
+            expires_at=expires_at,
+            used=False,
+            approval_token_hash=approval_token_hash,
+            actor_id=proposal.actor_id,
+            action=proposal.action.value,
+            thread_id=proposal.thread_id,
+            message_ids=list(proposal.message_ids),
+            recipients=list(proposal.recipients),
+            binding_hash=binding_hash,
+        )
+
+    def expected_binding_hash(self) -> str:
+        return self.compute_binding_hash(
+            proposal_id=self.proposal_id,
+            proposal_hash=self.proposal_hash,
+            approver_id=self.approver_id,
+            actor_id=self.actor_id,
+            action=self.action,
+            thread_id=self.thread_id,
+            message_ids=self.message_ids,
+            recipients=self.recipients,
+            expires_at=self.expires_at,
+        )
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -180,6 +251,9 @@ class ApprovalRecord:
             "approver_id": self.approver_id, "approved_at": self.approved_at,
             "expires_at": self.expires_at, "used": self.used,
             "approval_token_hash": self.approval_token_hash,
+            "actor_id": self.actor_id, "action": self.action,
+            "thread_id": self.thread_id, "message_ids": self.message_ids,
+            "recipients": self.recipients, "binding_hash": self.binding_hash,
         }
     
     @classmethod
@@ -189,15 +263,38 @@ class ApprovalRecord:
             approver_id=data["approver_id"], approved_at=data["approved_at"],
             expires_at=data["expires_at"], used=data.get("used", False),
             approval_token_hash=data.get("approval_token_hash", ""),
+            actor_id=data.get("actor_id", ""), action=data.get("action", ""),
+            thread_id=data.get("thread_id"), message_ids=data.get("message_ids", []),
+            recipients=data.get("recipients", []), binding_hash=data.get("binding_hash", ""),
         )
 
 
 class VMGAPolicy:
     """Gmail-specific policy evaluation layer."""
+
+    TOP_LEVEL_KEYS = {
+        "vmga_version", "profile", "description", "allowed_actions", "denied_actions",
+        "kinetic_requires_approval", "approval_required", "content_analysis",
+        "high_risk_indicators", "domain_policy", "approval_workflow",
+        "lockdown_threshold", "baseline_denies", "draft_policy", "label_allowlist",
+        "ledger_required_for_kinetic", "proposal_ttl_seconds", "internal_domains",
+        "external_domain_deny", "log_external_senders", "content_analysis_enabled",
+        "enforce_risk_threshold", "max_risk_score_auto_allow",
+    }
+    NESTED_KEYS = {
+        "approval_required": {"create_draft", "archive", "apply_label", "send", "forward", "delete", "download_attachment", "mark_read", "move"},
+        "content_analysis": {"enabled", "enforce_risk_threshold", "max_risk_score_auto_allow"},
+        "domain_policy": {"internal_domains", "external_domain_deny", "log_external_senders"},
+        "approval_workflow": {"expiration", "approver_allowlist"},
+        "baseline_denies": {"financial_instructions", "credential_transmission", "mfa_recovery_handling", "bulk_forwarding"},
+        "draft_policy": {"max_length", "require_justification", "allow_external_recipients"},
+    }
+    VALID_RISK_INDICATORS = set(ContentRisk().__dict__.keys())
     
     def __init__(self, profile: str, rules: Dict[str, Any]):
         self.profile = profile
         self.raw_rules = rules
+        self.validate_rules(rules)
         
         domain_policy = rules.get("domain_policy", {})
         self.internal_domains: Set[str] = set(
@@ -247,6 +344,50 @@ class VMGAPolicy:
         self.baseline_bulk = baseline_denies.get("bulk_forwarding", True)
         
         self.lockdown_threshold = rules.get("lockdown_threshold", 5)
+
+    @classmethod
+    def validate_rules(cls, rules: Dict[str, Any]) -> None:
+        """Reject ambiguous policy fields before runtime evaluation.
+
+        VMGA policy is intentionally small and deny-by-default. Unknown fields are
+        more dangerous than inconvenient because they can make reviewers believe a
+        control is active when the adapter ignores it.
+        """
+        if not isinstance(rules, dict):
+            raise ValueError("VMGA policy rules must be a mapping")
+
+        unknown = set(rules) - cls.TOP_LEVEL_KEYS
+        if unknown:
+            raise ValueError(f"Unknown VMGA policy field(s): {', '.join(sorted(unknown))}")
+
+        for key, allowed_keys in cls.NESTED_KEYS.items():
+            value = rules.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, dict):
+                raise ValueError(f"VMGA policy field '{key}' must be a mapping")
+            nested_unknown = set(value) - allowed_keys
+            if nested_unknown:
+                raise ValueError(f"Unknown VMGA policy field(s) under '{key}': {', '.join(sorted(nested_unknown))}")
+
+        for list_key in ("allowed_actions", "denied_actions"):
+            actions = rules.get(list_key, [])
+            if not isinstance(actions, list) or not all(isinstance(item, str) for item in actions):
+                raise ValueError(f"VMGA policy field '{list_key}' must be a list of action strings")
+            invalid_actions = [action for action in actions if GmailAction.from_string(action) is None]
+            if invalid_actions:
+                raise ValueError(f"Unknown VMGA action(s) in '{list_key}': {', '.join(sorted(invalid_actions))}")
+
+        indicators = rules.get("high_risk_indicators", [])
+        if not isinstance(indicators, list) or not all(isinstance(item, str) for item in indicators):
+            raise ValueError("VMGA policy field 'high_risk_indicators' must be a list of risk indicator strings")
+        invalid_indicators = [item for item in indicators if item not in cls.VALID_RISK_INDICATORS]
+        if invalid_indicators:
+            raise ValueError(f"Unknown VMGA risk indicator(s): {', '.join(sorted(invalid_indicators))}")
+
+    @staticmethod
+    def _decision(allowed: bool, reason: str, rule_id: str, error_code: Optional[str] = None) -> PolicyDecision:
+        return PolicyDecision(allowed=allowed, reason=reason, rule_id=rule_id, error_code=error_code or rule_id)
     
     def _parse_duration(self, value: Any) -> int:
         if isinstance(value, int):
@@ -312,36 +453,31 @@ class VMGAPolicy:
         action_str = proposal.action.value
         
         if self.allowed_actions and action_str not in self.allowed_actions:
-            return PolicyDecision(allowed=False, reason=f"Action '{action_str}' not in allowlist", rule_id="vmga_not_allowed")
+            return self._decision(False, f"Action '{action_str}' not in allowlist", "vmga_not_allowed")
         
         if action_str in self.denied_actions:
-            return PolicyDecision(allowed=False, reason=f"Action '{action_str}' is explicitly denied", rule_id="vmga_explicit_deny")
+            return self._decision(False, f"Action '{action_str}' is explicitly denied", "vmga_explicit_deny")
         
         if self.baseline_credential and content_risk.credential_request:
             if proposal.action in [GmailAction.SEND, GmailAction.FORWARD, GmailAction.CREATE_DRAFT]:
-                return PolicyDecision(allowed=False, reason="Credential-related content denied by baseline policy", 
-                                     rule_id="vmga_baseline_credential_deny")
+                return self._decision(False, "Credential-related content denied by baseline policy", "vmga_baseline_credential_deny")
         
         if self.baseline_mfa and content_risk.mfa_recovery:
             if proposal.action in [GmailAction.SEND, GmailAction.FORWARD]:
-                return PolicyDecision(allowed=False, reason="MFA/recovery content denied by baseline policy",
-                                     rule_id="vmga_baseline_mfa_deny")
+                return self._decision(False, "MFA/recovery content denied by baseline policy", "vmga_baseline_mfa_deny")
         
         if self.baseline_bulk and content_risk.bulk_operation:
             if proposal.action in [GmailAction.SEND, GmailAction.FORWARD]:
-                return PolicyDecision(allowed=False, reason="Bulk operation denied by baseline policy",
-                                     rule_id="vmga_baseline_bulk_deny")
+                return self._decision(False, "Bulk operation denied by baseline policy", "vmga_baseline_bulk_deny")
         
         if self.baseline_financial and content_risk.payment_mention:
             if proposal.action in [GmailAction.SEND, GmailAction.FORWARD]:
-                return PolicyDecision(allowed=False, reason="Payment instructions denied by baseline policy",
-                                     rule_id="vmga_baseline_financial_deny")
+                return self._decision(False, "Payment instructions denied by baseline policy", "vmga_baseline_financial_deny")
         
         if action_class == ActionClass.NON_KINETIC:
             if self.enforce_risk_threshold and content_risk.score > self.max_risk_score_auto_allow:
-                return PolicyDecision(allowed=False, reason=f"Risk score {content_risk.score} exceeds threshold",
-                                     rule_id="vmga_risk_threshold_exceeded")
-            return PolicyDecision(allowed=True, reason="Non-kinetic action within policy", rule_id="vmga_non_kinetic_allow")
+                return self._decision(False, f"Risk score {content_risk.score} exceeds threshold", "vmga_risk_threshold_exceeded")
+            return self._decision(True, "Non-kinetic action within policy", "vmga_non_kinetic_allow")
         
         if action_class == ActionClass.KINETIC:
             requires_approval = self.approval_required_per_action.get(action_str, self.kinetic_requires_approval)
@@ -349,36 +485,29 @@ class VMGAPolicy:
             if proposal.action == GmailAction.CREATE_DRAFT:
                 content = proposal.content or ""
                 if len(content) > self.draft_max_length:
-                    return PolicyDecision(allowed=False, 
-                                         reason=f"Draft exceeds maximum length ({self.draft_max_length} chars)",
-                                         rule_id="vmga_draft_length_exceeded")
+                    return self._decision(False, f"Draft exceeds maximum length ({self.draft_max_length} chars)", "vmga_draft_length_exceeded")
                 
                 if not self.draft_allow_external_recipients and content_risk.external_recipient:
-                    return PolicyDecision(allowed=False, reason="Draft creation with external recipients not allowed",
-                                         rule_id="vmga_draft_external_recipient_deny")
+                    return self._decision(False, "Draft creation with external recipients not allowed", "vmga_draft_external_recipient_deny")
                 
                 if requires_approval and self.draft_require_justification and not proposal.justification:
-                    return PolicyDecision(allowed=False, reason="Draft creation requires justification",
-                                         rule_id="vmga_draft_justification_required")
+                    return self._decision(False, "Draft creation requires justification", "vmga_draft_justification_required")
             
             if content_risk.external_recipient and self.external_domain_deny:
                 if proposal.action in [GmailAction.SEND, GmailAction.FORWARD]:
-                    return PolicyDecision(allowed=False, reason="External recipients denied for send/forward actions",
-                                         rule_id="vmga_external_recipient_deny")
+                    return self._decision(False, "External recipients denied for send/forward actions", "vmga_external_recipient_deny")
             
             high_risk_present = any(getattr(content_risk, indicator, False) for indicator in self.high_risk_indicators)
             
             if high_risk_present and requires_approval:
-                return PolicyDecision(allowed=False, reason="High-risk content indicators present",
-                                     rule_id="vmga_high_risk_review_required")
+                return self._decision(False, "High-risk content indicators present", "vmga_high_risk_review_required")
             
             if requires_approval:
-                return PolicyDecision(allowed=False, reason="Kinetic action requires approval",
-                                     rule_id="vmga_kinetic_approval_required")
+                return self._decision(False, "Kinetic action requires approval", "vmga_kinetic_approval_required")
             
-            return PolicyDecision(allowed=True, reason="Kinetic action auto-allowed", rule_id="vmga_kinetic_auto_allow")
+            return self._decision(True, "Kinetic action auto-allowed", "vmga_kinetic_auto_allow")
         
-        return PolicyDecision(allowed=False, reason="Policy evaluation requires review", rule_id="vmga_review_required")
+        return self._decision(False, "Policy evaluation requires review", "vmga_review_required")
 
 
 class VMGAStateStore:
@@ -741,6 +870,7 @@ class VMGAGmailAdapter:
             result = {
                 "status": "DENY", "proposal_id": None, "proposal_hash": None,
                 "reason": f"Invalid action '{action}'", "rule_id": "vmga_invalid_action",
+                "error_code": "vmga_invalid_action",
                 "action_class": None, "risk_score": 0, "risk_flags": [],
             }
             self._log_proposal_received(None, result["status"], None, ContentRisk(), result["rule_id"], result["reason"])
@@ -751,6 +881,7 @@ class VMGAGmailAdapter:
                 "status": "LOCKDOWN", "proposal_id": None, "proposal_hash": None,
                 "reason": "VMGA is in lockdown state due to repeated violations",
                 "rule_id": "vmga_lockdown_active", "action_class": None,
+                "error_code": "vmga_lockdown_active",
                 "risk_score": 0, "risk_flags": [],
             }
             self._log_proposal_received(None, result["status"], None, ContentRisk(), result["rule_id"], result["reason"])
@@ -782,6 +913,7 @@ class VMGAGmailAdapter:
                     "proposal_hash": proposal.compute_hash(),
                     "reason": "Failed to persist proposal state (fail-closed)",
                     "rule_id": "vmga_state_persist_failed",
+                    "error_code": "vmga_state_persist_failed",
                     "action_class": "kinetic" if is_kinetic else "non_kinetic",
                     "risk_score": content_risk.score,
                     "risk_flags": [k for k, v in content_risk.__dict__.items() if v],
@@ -807,6 +939,7 @@ class VMGAGmailAdapter:
                 "proposal_hash": proposal.compute_hash(),
                 "reason": "Ledger write failure triggered lockdown (fail-closed)",
                 "rule_id": "vmga_ledger_failure_lockdown",
+                "error_code": "vmga_ledger_failure_lockdown",
                 "action_class": "kinetic", "risk_score": content_risk.score,
                 "risk_flags": [k for k, v in content_risk.__dict__.items() if v],
             }
@@ -815,6 +948,7 @@ class VMGAGmailAdapter:
             "status": status, "proposal_id": proposal.proposal_id,
             "proposal_hash": proposal.compute_hash(), "reason": decision.reason,
             "rule_id": decision.rule_id,
+            "error_code": None if decision.allowed else decision.error_code,
             "action_class": "kinetic" if is_kinetic else "non_kinetic",
             "risk_score": content_risk.score,
             "risk_flags": [k for k, v in content_risk.__dict__.items() if v],
@@ -859,10 +993,10 @@ class VMGAGmailAdapter:
         
         # Store approval record (store hash of token, not token itself)
         token_hash = hashlib.sha256(approval_token.encode()).hexdigest()[:32]
-        self.approvals[proposal_id] = ApprovalRecord(
-            proposal_id=proposal_id, proposal_hash=proposal_hash, approver_id=approver_id,
+        self.approvals[proposal_id] = ApprovalRecord.from_proposal(
+            proposal=proposal, proposal_hash=proposal_hash, approver_id=approver_id,
             approved_at=approved_at.isoformat(), expires_at=expires_at.isoformat(),
-            used=False, approval_token_hash=token_hash,
+            approval_token_hash=token_hash,
         )
         
         del self.pending_proposals[proposal_id]
@@ -889,14 +1023,14 @@ class VMGAGmailAdapter:
             "expires_at": expires_at.isoformat(),
         }
     
-    def _is_approval_valid(self, proposal_id: str, proposal_hash: str, approver_id: str, approval_token: str) -> Tuple[bool, str]:
+    def _is_approval_valid(self, proposal_id: str, proposal_hash: str, approver_id: str, approval_token: str) -> Tuple[bool, str, str]:
         """Verify approval exists, hasn't expired, matches hash, and token is cryptographically valid.
         
         In strict_mode, also verifies HMAC to prevent attacks where attacker writes arbitrary token_hash to file.
         Includes rate limiting for repeated invalid token attempts.
         """
         if proposal_id not in self.approvals:
-            return False, "Approval not found"
+            return False, "Approval not found", "vmga_approval_not_found"
         
         approval = self.approvals[proposal_id]
         
@@ -909,7 +1043,7 @@ class VMGAGmailAdapter:
                 # Check if lockout period (1 hour) has passed
                 first_attempt = datetime.fromisoformat(attempt_info["first_attempt"])
                 if (now - first_attempt).total_seconds() < 3600:
-                    return False, f"Rate limit exceeded: {self._max_token_attempts} failed attempts"
+                    return False, f"Rate limit exceeded: {self._max_token_attempts} failed attempts", "vmga_approval_rate_limited"
                 else:
                     # Reset after lockout period
                     del self._failed_token_attempts[attempt_key]
@@ -917,19 +1051,28 @@ class VMGAGmailAdapter:
         # Verify hash binding
         if approval.proposal_hash != proposal_hash:
             self._record_failed_attempt(attempt_key, now)
-            return False, "Proposal hash mismatch (mutation detected)"
+            return False, "Proposal hash mismatch (mutation detected)", "vmga_approval_hash_mismatch"
+
+        if approval.binding_hash:
+            expected_binding_hash = approval.expected_binding_hash()
+            if not hmac.compare_digest(approval.binding_hash, expected_binding_hash):
+                self._record_failed_attempt(attempt_key, now)
+                return False, "Approval binding hash mismatch (approval record mutation detected)", "vmga_approval_binding_mismatch"
+        elif self.strict_mode:
+            self._record_failed_attempt(attempt_key, now)
+            return False, "Approval binding hash missing", "vmga_approval_binding_missing"
         
         # Verify token hash matches (first line of defense)
         token_hash = hashlib.sha256(approval_token.encode()).hexdigest()[:32]
         if approval.approval_token_hash != token_hash:
             self._record_failed_attempt(attempt_key, now)
-            return False, "Approval token mismatch"
+            return False, "Approval token mismatch", "vmga_approval_token_mismatch"
         
         # In strict_mode, also verify HMAC (prevents file-write attacks)
         if self.strict_mode and self.approval_secret:
             if not self._verify_approval_token(proposal_id, proposal_hash, approver_id, approval_token):
                 self._record_failed_attempt(attempt_key, now)
-                return False, "Approval token HMAC verification failed"
+                return False, "Approval token HMAC verification failed", "vmga_approval_token_invalid"
         
         # Success - clear failed attempts for this key
         if attempt_key in self._failed_token_attempts:
@@ -939,15 +1082,15 @@ class VMGAGmailAdapter:
         try:
             expires_at = datetime.fromisoformat(approval.expires_at)
             if datetime.now(timezone.utc) > expires_at:
-                return False, "Approval expired"
+                return False, "Approval expired", "vmga_approval_expired"
         except ValueError:
-            return False, "Invalid expiration format"
+            return False, "Invalid expiration format", "vmga_approval_expiry_invalid"
         
         # Check not already used
         if approval.used:
-            return False, "Approval already used"
+            return False, "Approval already used", "vmga_approval_already_used"
         
-        return True, "Valid"
+        return True, "Valid", "vmga_approval_valid"
     
     def _record_failed_attempt(self, attempt_key: str, now: datetime) -> None:
         """Record a failed token attempt for rate limiting and persist to disk."""
@@ -967,9 +1110,9 @@ class VMGAGmailAdapter:
         approval = self.approvals[proposal_id]
         
         # Verify approval with token and approver_id
-        is_valid, reason = self._is_approval_valid(proposal_id, proposal_hash, approval.approver_id, approval_token)
+        is_valid, reason, error_code = self._is_approval_valid(proposal_id, proposal_hash, approval.approver_id, approval_token)
         if not is_valid:
-            return {"status": "DENY", "error": reason, "error_code": "vmga_approval_invalid"}
+            return {"status": "DENY", "error": reason, "error_code": error_code, "rule_id": error_code}
         
         # Build Vesta envelope
         request = ExecutionRequestEnvelope(
@@ -1108,4 +1251,6 @@ class VMGAGmailAdapter:
 def load_vmga_policy(path: str) -> Dict[str, Any]:
     import yaml
     with open(path) as f:
-        return yaml.safe_load(f)
+        rules = yaml.safe_load(f) or {}
+    VMGAPolicy.validate_rules(rules)
+    return rules

@@ -77,3 +77,4 @@ class PolicyDecision:
     allowed: bool
     reason: str
     rule_id: Optional[str] = None
+    error_code: Optional[str] = None
