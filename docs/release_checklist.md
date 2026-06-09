@@ -2,7 +2,7 @@
 
 Before making VMGA public:
 
-- Choose and add a real open-source license.
+- Verify the MIT License is present and reflected in package metadata.
 - Run the VMGA test suite.
 - Run secrets scanning.
 - Run SAST or document the static-analysis substitute.

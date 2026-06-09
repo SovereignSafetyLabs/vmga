@@ -8,9 +8,12 @@ version = "0.2.0"
 description = "Vesta Mail Governance Adapter for agentic Gmail access"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "LicenseRef-Pending" }
+license = { text = "MIT" }
 authors = [
   { name = "Sovereign Safety Labs" }
+]
+classifiers = [
+  "License :: OSI Approved :: MIT License"
 ]
 dependencies = [
   "PyYAML>=6.0"

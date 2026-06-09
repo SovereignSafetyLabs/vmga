@@ -62,3 +62,7 @@ pytest -q
 VMGA does not claim prompt-injection prevention, DLP, host compromise
 protection, browser/session isolation, compliance certification, or security of
 Hermes/OpenClaw internals.
+
+## License
+
+VMGA is released under the MIT License. See `LICENSE`.
