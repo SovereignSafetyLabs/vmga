@@ -11,6 +11,10 @@ Before making VMGA public:
   compliance certification, or hard isolation without deployment preconditions.
 - For OpenClaw examples, capture `openclaw security audit --deep` and
   `openclaw secrets audit --check` output.
+- Record the OpenClaw version under test and check current release notes for
+  security-relevant changes to HTTP tool gating, MCP redirect handling, plugin
+  install pinning, state-store migrations, service env planning, and release
+  proof behavior.
 - Capture `openclaw sandbox explain --json` and effective exec approvals for
   mailbox-capable agents.
 - If sandbox or OpenShell policy changes, recreate affected runtimes and capture

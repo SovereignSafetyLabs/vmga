@@ -335,8 +335,35 @@ This keeps VMGA's claims bounded: VMGA governs Gmail actions at the mailbox
 execution boundary; it does not make OpenClaw a hostile multi-tenant isolation
 layer.
 
+## Release Watchpoints
+
+OpenClaw `v2026.6.5` includes several security-relevant fixes that VMGA
+deployments should preserve in release evidence:
+
+- Auth profile state moved toward SQLite-backed durability, while session
+  metadata SQLite migration was deferred in that release train. VMGA deployments
+  should record which OpenClaw state stores remain JSON-backed and which are
+  SQLite-backed.
+- Owner-only HTTP tools are gated more tightly. VMGA should still prove
+  `/tools/invoke` cannot reach non-VMGA Gmail or Workspace write tools.
+- MCP HTTP redirects are guarded and richer MCP tool-result blocks are coerced
+  at the materialize boundary. VMGA should still treat MCP servers with
+  Workspace credentials as bypass surfaces unless they route through VMGA.
+- Official plugin install records keep trusted pins, and prerelease fallback
+  integrity checks avoid carrying stale integrity forward. VMGA OpenClaw
+  examples should record plugin manifest hashes and pinned package/commit
+  identities.
+- Service environment planning skips unresolved placeholders that could mask
+  state-dir secrets. VMGA deployments should record effective service env and
+  prove VMGA/Gmail secrets are not agent-readable.
+- Release and QA proof paths now fail closed on missing runtime tool evidence,
+  loose release limits, and unbounded diagnostics. VMGA should keep its release
+  evidence similarly bounded and reproducible.
+
 ## References
 
+- OpenClaw 2026.6.5 Release:
+  https://github.com/openclaw/openclaw/releases/tag/v2026.6.5
 - OpenClaw Gateway Security: https://docs.openclaw.ai/gateway/security
 - OpenClaw Gateway Exposure Runbook:
   https://docs.openclaw.ai/gateway/security/exposure-runbook
