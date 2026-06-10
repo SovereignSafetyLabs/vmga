@@ -29,14 +29,12 @@ class PostureConfig:
     approval_auth: str = "hmac"
     evidence_integrity: str = "append_only"
     agent_roots: List[str] = field(default_factory=list)
+    direct_bypass_attested: bool = False
+    direct_bypass_evidence: str = ""
 
 
 def _resolve(path: str | Path) -> Path:
     return Path(path).expanduser().resolve()
-
-
-def _default_agent_roots() -> List[str]:
-    return [str(Path.cwd())]
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -70,7 +68,7 @@ def assess_posture(config: PostureConfig) -> Dict[str, Any]:
     cannot observe locally remain ``unknown`` and never count toward hard-ready.
     """
 
-    agent_roots = config.agent_roots or _default_agent_roots()
+    agent_roots = config.agent_roots
     checks: List[Dict[str, str]] = []
 
     if config.bearer_token_set:
@@ -112,6 +110,9 @@ def assess_posture(config: PostureConfig) -> Dict[str, Any]:
         ("state_path", config.state_db_path, "State DB path"),
         ("ledger_path", config.ledger_path, "Evidence ledger path"),
     ):
+        if not agent_roots:
+            checks.append(_check(check_id, UNKNOWN, f"{label} isolation cannot be assessed until operator supplies --agent-root.", detail=str(_resolve(path_value))))
+            continue
         root = _path_under_roots(path_value, agent_roots)
         if root:
             checks.append(_check(check_id, WARN, f"{label} is under an agent/root workspace; hard-boundary claims require operator-owned paths.", detail=f"path={_resolve(path_value)} root={root}"))
@@ -133,7 +134,10 @@ def assess_posture(config: PostureConfig) -> Dict[str, Any]:
     else:
         checks.append(_check("evidence_rotation", WARN, "Evidence ledger rotation is not configured."))
 
-    checks.append(_check("direct_gmail_bypass", UNKNOWN, "VMGA cannot locally prove agents lack direct Gmail/Workspace access; capture bypass evidence before hard-enforcement claims."))
+    if config.direct_bypass_attested and config.direct_bypass_evidence:
+        checks.append(_check("direct_gmail_bypass", PASS, "Operator attests direct Gmail/Workspace bypass closure evidence exists.", detail=config.direct_bypass_evidence))
+    else:
+        checks.append(_check("direct_gmail_bypass", UNKNOWN, "VMGA cannot locally prove agents lack direct Gmail/Workspace access; supply explicit bypass-closure attestation and evidence before hard-enforcement claims."))
     checks.append(_check("single_process_boundary", PASS, "Built-in broker is a single-process control plane; do not run multiple broker processes against one state DB for hard claims."))
 
     hard_blockers = [item for item in checks if item["status"] in {FAIL, WARN, UNKNOWN}]
@@ -165,4 +169,3 @@ def _summary_for_mode(mode: str) -> str:
 
 def print_posture_summary(report: Dict[str, Any]) -> str:
     return f"VMGA posture: {report['mode']} - {report['summary']}"
-

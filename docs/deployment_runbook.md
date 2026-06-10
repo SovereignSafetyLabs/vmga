@@ -68,10 +68,14 @@ vmga-verify-evidence /path/outside/agent/evidence.jsonl --json
 `/v1/posture` is a runtime self-check, not a formal sandbox proof. It reports
 whether VMGA can locally see hard-enforcement preconditions such as broker auth,
 backend wrapper choice, obvious path placement, evidence rotation, approval
-mode, and evidence-integrity mode. `unknown` never counts as hard-ready. If the
-posture mode is `advisory` or `cannot_determine`, describe the deployment that
-way until missing credential-isolation, direct-bypass, and evidence-anchor proof
-is collected.
+mode, and evidence-integrity mode. `unknown` never counts as hard-ready.
+Path-isolation checks report `unknown` unless the operator supplies the
+agent-readable roots with `--agent-root`. Direct Gmail/Workspace bypass closure
+is not locally provable by VMGA; it becomes `pass` only when the operator
+supplies `--attest-no-direct-bypass` and a `--direct-bypass-evidence` reference.
+If the posture mode is `advisory` or `cannot_determine`, describe the
+deployment that way until missing credential-isolation, direct-bypass, and
+evidence-anchor proof is collected.
 
 If `/health` reports lockdown, inspect evidence first, then reset only through
 an operator-controlled maintenance path. `reset_lockdown` is an in-process

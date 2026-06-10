@@ -105,7 +105,10 @@ vmga-operator execute <proposal-id> <proposal-hash> <approval-token>
 The broker exposes `/v1/posture` and prints a startup posture summary. Treat any
 `advisory` or `cannot_determine` posture as not hard-enforcement-ready; unknown
 direct-bypass or credential-isolation checks must be resolved with operator
-evidence before making hard-boundary claims.
+evidence before making hard-boundary claims. Path-isolation checks report
+`unknown` unless the operator supplies the agent-readable root with
+`--agent-root`; direct-bypass closure requires explicit operator attestation
+with an evidence reference.
 
 For a real-account smoke test, run the broker first and then opt in explicitly:
 

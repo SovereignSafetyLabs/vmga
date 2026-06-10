@@ -183,7 +183,9 @@ def operator_main(argv: list[str] | None = None) -> int:
     posture.add_argument("--gog-binary", default="")
     posture.add_argument("--gog-home", default=None)
     posture.add_argument("--ledger-rotate-bytes", type=int, default=0)
-    posture.add_argument("--agent-root", action="append", default=None, help="Agent-readable workspace root; defaults to cwd")
+    posture.add_argument("--agent-root", action="append", default=None, help="Agent-readable workspace root; required for path-isolation PASS checks")
+    posture.add_argument("--attest-no-direct-bypass", action="store_true", help="Operator attests direct Gmail/Workspace bypass closure evidence exists")
+    posture.add_argument("--direct-bypass-evidence", default="", help="Reference to direct-bypass closure evidence")
 
     show = sub.add_parser("show", help="Show one proposal or approval")
     show.add_argument("proposal_id")
@@ -213,7 +215,9 @@ def operator_main(argv: list[str] | None = None) -> int:
                 bearer_token_set=bool(bearer_token),
                 gog_binary=args.gog_binary,
                 gog_home=args.gog_home,
-                agent_roots=args.agent_root or [str(Path.cwd())],
+                agent_roots=args.agent_root or [],
+                direct_bypass_attested=args.attest_no_direct_bypass,
+                direct_bypass_evidence=args.direct_bypass_evidence,
             ))
         else:
             payload = _get_broker_json(args.broker_url, "/v1/posture", bearer_token)
@@ -290,7 +294,9 @@ def broker_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gog-client", default=None, help="gog OAuth client name")
     parser.add_argument("--gog-home", default=None, help="gog config root outside the agent workspace")
     parser.add_argument("--gog-timeout", type=float, default=30.0, help="gog command timeout in seconds")
-    parser.add_argument("--agent-root", action="append", default=None, help="Agent-readable workspace root for posture checks; defaults to cwd")
+    parser.add_argument("--agent-root", action="append", default=None, help="Agent-readable workspace root for posture checks; required for path-isolation PASS checks")
+    parser.add_argument("--attest-no-direct-bypass", action="store_true", help="Operator attests direct Gmail/Workspace bypass closure evidence exists")
+    parser.add_argument("--direct-bypass-evidence", default="", help="Reference to direct-bypass closure evidence")
     args = parser.parse_args(argv)
 
     approval_secret = os.getenv(args.approval_secret_env)
@@ -339,7 +345,9 @@ def broker_main(argv: list[str] | None = None) -> int:
         allow_unauthenticated=args.allow_unauthenticated,
         gog_binary=getattr(backend, "binary", args.gog_binary),
         gog_home=args.gog_home,
-        agent_roots=args.agent_root or [str(Path.cwd())],
+        agent_roots=args.agent_root or [],
+        direct_bypass_attested=args.attest_no_direct_bypass,
+        direct_bypass_evidence=args.direct_bypass_evidence,
     )
     broker = VMGABroker(adapter, executor, backend=backend, posture_config=posture_config)
     server = make_server(args.host, args.port, broker, bearer_token=bearer_token)

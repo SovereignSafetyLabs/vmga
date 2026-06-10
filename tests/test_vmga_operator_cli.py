@@ -171,6 +171,22 @@ def test_operator_posture_local_marks_repo_paths_advisory(capsys):
     assert any(check["id"] == "state_path" and check["status"] == "warn" for check in payload["checks"])
 
 
+def test_operator_posture_local_paths_unknown_without_agent_root(capsys):
+    result = operator_main([
+        "--json",
+        "--state-db",
+        ".vmga/state.sqlite3",
+        "posture",
+        "--local",
+        "--ledger",
+        ".vmga/evidence.jsonl",
+    ])
+
+    assert result == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert any(check["id"] == "state_path" and check["status"] == "unknown" for check in payload["checks"])
+
+
 def test_broker_main_refuses_non_loopback_without_bearer_token(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("VMGA_APPROVAL_SECRET", "secret")
     monkeypatch.delenv("VMGA_BROKER_TOKEN", raising=False)

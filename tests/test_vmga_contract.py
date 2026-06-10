@@ -168,6 +168,56 @@ def test_broker_reports_runtime_posture():
         assert broker.health()["posture_mode"] == posture["mode"]
 
 
+def test_posture_path_checks_are_unknown_without_explicit_agent_roots():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        broker = VMGABroker(
+            adapter,
+            posture_config=PostureConfig(
+                backend="gogcli",
+                gog_binary="/opt/homebrew/bin/gog-agent-safe",
+                policy_path=str(Path(tmpdir) / "policy.yaml"),
+                state_db_path=str(Path(tmpdir) / "state.sqlite3"),
+                ledger_path=str(Path(tmpdir) / "evidence.jsonl"),
+                bearer_token_set=True,
+                ledger_rotate_bytes=100,
+            ),
+        )
+
+        posture = broker.posture()
+        assert any(check["id"] == "state_path" and check["status"] == "unknown" for check in posture["checks"])
+        assert any(check["id"] == "direct_gmail_bypass" and check["status"] == "unknown" for check in posture["checks"])
+        assert posture["mode"] == "cannot_determine"
+
+
+def test_posture_hard_ready_requires_explicit_bypass_attestation_and_roots():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        broker = VMGABroker(
+            adapter,
+            posture_config=PostureConfig(
+                backend="gogcli",
+                gog_binary="/opt/homebrew/bin/gog-agent-safe",
+                policy_path=str(Path(tmpdir) / "policy.yaml"),
+                state_db_path=str(Path(tmpdir) / "state.sqlite3"),
+                ledger_path=str(Path(tmpdir) / "evidence.jsonl"),
+                bearer_token_set=True,
+                ledger_rotate_bytes=100,
+                approval_auth="signature",
+                evidence_integrity="signed_checkpoint",
+                agent_roots=[str(Path.cwd())],
+                gog_home=str(Path(tmpdir) / "gog-home"),
+                direct_bypass_attested=True,
+                direct_bypass_evidence="artifacts/release/direct-bypass.json",
+            ),
+        )
+
+        posture = broker.posture()
+        assert posture["mode"] == "hard_enforcement_ready"
+        assert posture["hard_enforcement_ready"] is True
+        assert any(check["id"] == "direct_gmail_bypass" and check["status"] == "pass" for check in posture["checks"])
+
+
 def test_http_broker_exposes_posture_endpoint():
     with tempfile.TemporaryDirectory() as tmpdir:
         adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
@@ -177,7 +227,6 @@ def test_http_broker_exposes_posture_endpoint():
                 backend="fake",
                 state_db_path=str(Path(tmpdir) / "state.sqlite3"),
                 ledger_path=str(Path(tmpdir) / "evidence.jsonl"),
-                agent_roots=[str(Path.cwd())],
             ),
         )
         server = make_server("127.0.0.1", 0, broker)
