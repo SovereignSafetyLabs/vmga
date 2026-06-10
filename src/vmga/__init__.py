@@ -15,7 +15,7 @@ from .vmga_adapter import (
     ApprovalRecord,
     load_vmga_policy,
 )
-from .backends import FakeGmailBackend
+from .backends import FakeGmailBackend, GogCLIBackend
 from .broker import VMGABroker
 from .executor import VMGAExecutor
 from .sqlite_state import SQLiteStateStore
@@ -30,6 +30,7 @@ __all__ = [
     "ContentRisk",
     "ApprovalRecord",
     "FakeGmailBackend",
+    "GogCLIBackend",
     "SQLiteStateStore",
     "VMGABroker",
     "VMGAExecutor",

@@ -18,6 +18,7 @@
     "content": { "type": ["string", "null"] },
     "recipients": { "type": "array", "items": { "type": "string" } },
     "attachment_ids": { "type": "array", "items": { "type": "string" } },
+    "parameters": { "type": "object" },
     "justification": { "type": "string" },
     "requested_at": { "type": "string" }
   }

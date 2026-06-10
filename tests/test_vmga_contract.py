@@ -126,6 +126,37 @@ def test_broker_propose_and_execute_fail_closed_without_executor():
         assert denied["error_code"] == "vmga_executor_unavailable"
 
 
+def test_broker_executes_allowed_search_through_backend():
+    class SearchBackend:
+        def __init__(self):
+            self.query = None
+            self.max_results = None
+
+        def search(self, query, max_results=10):
+            self.query = query
+            self.max_results = max_results
+            return {"status": "SUCCESS", "messages": [{"message_id": "m1"}]}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        backend = SearchBackend()
+        broker = VMGABroker(adapter, backend=backend)
+
+        result = broker.propose(
+            {
+                "action": "read",
+                "actor_id": "agent_1",
+                "search_query": "from:test@example.com",
+                "max_results": 2,
+            }
+        )
+
+        assert result["status"] == "ALLOW"
+        assert result["backend_result"]["status"] == "SUCCESS"
+        assert backend.query == "from:test@example.com"
+        assert backend.max_results == 2
+
+
 def test_evidence_verifier_accepts_valid_sequence_and_rejects_token_leak():
     proposal_hash = "sha256:" + "a" * 64
     events = [

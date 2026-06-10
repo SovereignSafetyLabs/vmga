@@ -13,10 +13,14 @@ broker:
   public_url: https://broker.example.invalid
 
 gmail:
-  backend: external-service
+  backend: gogcli
   mailbox: ops@example.com
   allowed_domains:
     - example.com
+  gogcli:
+    binary: /opt/homebrew/bin/gog-agent-safe
+    home: /srv/vmga/gog-home
+    allowed_commands_exact: gmail.search,gmail.get,gmail.drafts.create
 
 credentials:
   approval_secret_source: external-credential-service

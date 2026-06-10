@@ -17,10 +17,7 @@ class VMGAExecutor:
         action = approval.action if approval else "unknown"
 
         def handler(_request: Any) -> Dict[str, Any]:
-            payload = {
-                "proposal_id": proposal_id,
-                "proposal_hash": proposal_hash,
-            }
+            payload = approval.to_execution_payload() if approval else {"proposal_id": proposal_id, "proposal_hash": proposal_hash}
             return self.backend.execute(action, payload)
 
         return self.adapter.execute_approved(proposal_id, proposal_hash, approval_token, handler)

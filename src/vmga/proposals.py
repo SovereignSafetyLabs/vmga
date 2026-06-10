@@ -43,6 +43,7 @@ def validate_proposal_dict(data: Dict[str, Any]) -> VMGAProposal:
         content=data.get("content"),
         recipients=normalize_string_list(data.get("recipients")),
         attachment_ids=normalize_string_list(data.get("attachment_ids")),
+        parameters=data.get("parameters", {}),
         justification=str(data.get("justification", "")),
         requested_at=str(data["requested_at"]),
     )

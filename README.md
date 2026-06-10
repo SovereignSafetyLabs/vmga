@@ -48,6 +48,30 @@ python3 -m pip install -e ".[dev]"
 pytest -q
 ```
 
+## Broker Mode
+
+Run the local broker with the fake backend for offline development:
+
+```bash
+export VMGA_APPROVAL_SECRET="replace-with-a-local-dev-secret"
+vmga-broker --backend fake --policy policies/draft_assist.yaml
+```
+
+For a gogcli-backed broker, point VMGA at the agent-safe wrapper and keep gog
+OAuth config outside the agent-readable workspace:
+
+```bash
+export VMGA_APPROVAL_SECRET="replace-with-a-broker-secret"
+vmga-broker \
+  --backend gogcli \
+  --gog-binary /opt/homebrew/bin/gog-agent-safe \
+  --gog-home /path/outside/agent/workspace
+```
+
+The gogcli backend starts with a narrow Gmail surface: search, read, and create
+draft. It always enables `--gmail-no-send`, `--no-input`, and an exact command
+allowlist. Gmail send remains denied by VMGA policy and by the backend.
+
 ## Design Influences
 
 - The original VMGA reference implementation in Vesta Agent Runtime Governance.

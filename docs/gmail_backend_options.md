@@ -21,6 +21,22 @@ separate broker service.
 - Broker credentials should live outside the agent-readable workspace
 - The broker should keep approval and token material out of the example file
 
+### gogcli Backend
+
+`vmga-broker --backend gogcli` runs Gmail operations through a broker-owned
+`gog-agent-safe`/`gog` binary with list-style subprocess calls. The backend is
+narrow by default:
+
+- `gmail search` for governed search.
+- `gmail get --sanitize-content` for governed message reads.
+- `gmail drafts create --body-file -` for approved draft creation.
+
+The backend always adds `--gmail-no-send`, `--no-input`, and an exact command
+allowlist for `gmail.search,gmail.get,gmail.drafts.create`. Draft bodies are
+passed over stdin instead of command-line arguments. Do not expose direct
+`gog`, `gws`, or Google Workspace tools to Hermes/OpenClaw; route those requests
+through the VMGA broker.
+
 ## Release Hygiene
 
 All backend examples must stay on placeholder values and must not contain live

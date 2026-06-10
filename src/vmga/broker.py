@@ -11,9 +11,10 @@ from .vmga_adapter import VMGAGmailAdapter
 
 
 class VMGABroker:
-    def __init__(self, adapter: VMGAGmailAdapter, executor: Optional[VMGAExecutor] = None):
+    def __init__(self, adapter: VMGAGmailAdapter, executor: Optional[VMGAExecutor] = None, backend: Optional[Any] = None):
         self.adapter = adapter
         self.executor = executor
+        self.backend = backend if backend is not None else getattr(executor, "backend", None)
 
     def health(self) -> Dict[str, Any]:
         return {
@@ -25,12 +26,44 @@ class VMGABroker:
     def propose(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         allowed = {
             "action", "actor_id", "thread_id", "message_ids", "content",
-            "recipients", "attachment_ids", "justification", "sender",
+            "recipients", "attachment_ids", "parameters", "justification", "sender",
+        }
+        parameter_keys = {
+            "subject", "search_query", "message_id", "max_results", "metadata",
+            "cc", "bcc", "reply_to_message_id", "reply_to",
         }
         kwargs = {key: value for key, value in payload.items() if key in allowed}
+        parameters = dict(kwargs.get("parameters") or {})
+        for key in parameter_keys:
+            if key in payload and payload[key] is not None:
+                parameters[key] = payload[key]
+        if parameters:
+            kwargs["parameters"] = parameters
         if "action" not in kwargs or "actor_id" not in kwargs:
             return {"status": "DENY", "error_code": "vmga_broker_bad_request", "error": "action and actor_id are required"}
-        return self.adapter.propose_action(**kwargs)
+        result = self.adapter.propose_action(**kwargs)
+        backend_result = self._execute_allowed_non_kinetic(kwargs, result)
+        if backend_result is not None:
+            result["backend_result"] = backend_result
+        return result
+
+    def _execute_allowed_non_kinetic(self, proposal_kwargs: Dict[str, Any], proposal_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if self.backend is None or proposal_result.get("status") != "ALLOW":
+            return None
+        action = proposal_kwargs.get("action")
+        parameters = proposal_kwargs.get("parameters") or {}
+        try:
+            if action == "read" and parameters.get("search_query") and hasattr(self.backend, "search"):
+                return self.backend.search(str(parameters["search_query"]), int(parameters.get("max_results", 10)))
+            if action == "read" and hasattr(self.backend, "read"):
+                message_id = parameters.get("message_id")
+                if message_id is None and proposal_kwargs.get("message_ids"):
+                    message_id = proposal_kwargs["message_ids"][0]
+                if message_id:
+                    return self.backend.read(str(message_id))
+        except Exception as exc:
+            return {"status": "ERROR", "error_code": "vmga_backend_execution_failed", "error": str(exc)}
+        return None
 
     def approve(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:

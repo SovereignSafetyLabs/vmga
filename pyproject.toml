@@ -29,6 +29,7 @@ gogcli = []
 
 [project.scripts]
 vmga-verify-evidence = "vmga.cli:verify_evidence_main"
+vmga-broker = "vmga.cli:broker_main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

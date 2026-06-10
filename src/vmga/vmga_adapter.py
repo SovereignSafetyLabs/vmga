@@ -76,6 +76,7 @@ class VMGAProposal:
     content: Optional[str] = None  # Draft content, if applicable
     recipients: List[str] = field(default_factory=list)
     attachment_ids: List[str] = field(default_factory=list)
+    parameters: Dict[str, Any] = field(default_factory=dict)
     justification: str = ""
     requested_at: str = ""
     
@@ -90,6 +91,7 @@ class VMGAProposal:
             "content": self.content,
             "recipients": sorted(self.recipients),
             "attachment_ids": sorted(self.attachment_ids),
+            "parameters": self.parameters,
             "justification": self.justification,
             "requested_at": self.requested_at,
         }
@@ -110,6 +112,7 @@ class VMGAProposal:
             "content": self.content,
             "recipients": self.recipients,
             "attachment_ids": self.attachment_ids,
+            "parameters": self.parameters,
             "justification": self.justification,
             "requested_at": self.requested_at,
         }
@@ -126,6 +129,7 @@ class VMGAProposal:
             content=data.get("content"),
             recipients=data.get("recipients", []),
             attachment_ids=data.get("attachment_ids", []),
+            parameters=data.get("parameters", {}),
             justification=data.get("justification", ""),
             requested_at=data.get("requested_at", ""),
         )
@@ -178,13 +182,17 @@ class ApprovalRecord:
     thread_id: Optional[str] = None
     message_ids: List[str] = field(default_factory=list)
     recipients: List[str] = field(default_factory=list)
+    attachment_ids: List[str] = field(default_factory=list)
+    content: Optional[str] = None
+    parameters: Dict[str, Any] = field(default_factory=dict)
     binding_hash: str = ""
 
     @staticmethod
     def compute_binding_hash(
         proposal_id: str, proposal_hash: str, approver_id: str, actor_id: str,
         action: str, thread_id: Optional[str], message_ids: List[str],
-        recipients: List[str], expires_at: str,
+        recipients: List[str], expires_at: str, attachment_ids: Optional[List[str]] = None,
+        content: Optional[str] = None, parameters: Optional[Dict[str, Any]] = None,
     ) -> str:
         data = {
             "proposal_id": proposal_id,
@@ -195,6 +203,9 @@ class ApprovalRecord:
             "thread_id": thread_id,
             "message_ids": sorted(message_ids),
             "recipients": sorted(recipients),
+            "attachment_ids": sorted(attachment_ids or []),
+            "content": content,
+            "parameters": parameters or {},
             "expires_at": expires_at,
         }
         payload = json.dumps(data, sort_keys=True, separators=(',', ':'))
@@ -214,6 +225,9 @@ class ApprovalRecord:
             thread_id=proposal.thread_id,
             message_ids=proposal.message_ids,
             recipients=proposal.recipients,
+            attachment_ids=proposal.attachment_ids,
+            content=proposal.content,
+            parameters=proposal.parameters,
             expires_at=expires_at,
         )
         return cls(
@@ -229,6 +243,9 @@ class ApprovalRecord:
             thread_id=proposal.thread_id,
             message_ids=list(proposal.message_ids),
             recipients=list(proposal.recipients),
+            attachment_ids=list(proposal.attachment_ids),
+            content=proposal.content,
+            parameters=dict(proposal.parameters),
             binding_hash=binding_hash,
         )
 
@@ -242,6 +259,9 @@ class ApprovalRecord:
             thread_id=self.thread_id,
             message_ids=self.message_ids,
             recipients=self.recipients,
+            attachment_ids=self.attachment_ids,
+            content=self.content,
+            parameters=self.parameters,
             expires_at=self.expires_at,
         )
     
@@ -253,7 +273,9 @@ class ApprovalRecord:
             "approval_token_hash": self.approval_token_hash,
             "actor_id": self.actor_id, "action": self.action,
             "thread_id": self.thread_id, "message_ids": self.message_ids,
-            "recipients": self.recipients, "binding_hash": self.binding_hash,
+            "recipients": self.recipients, "attachment_ids": self.attachment_ids,
+            "content": self.content, "parameters": self.parameters,
+            "binding_hash": self.binding_hash,
         }
     
     @classmethod
@@ -265,8 +287,24 @@ class ApprovalRecord:
             approval_token_hash=data.get("approval_token_hash", ""),
             actor_id=data.get("actor_id", ""), action=data.get("action", ""),
             thread_id=data.get("thread_id"), message_ids=data.get("message_ids", []),
-            recipients=data.get("recipients", []), binding_hash=data.get("binding_hash", ""),
+            recipients=data.get("recipients", []), attachment_ids=data.get("attachment_ids", []),
+            content=data.get("content"), parameters=data.get("parameters", {}),
+            binding_hash=data.get("binding_hash", ""),
         )
+
+    def to_execution_payload(self) -> Dict[str, Any]:
+        return {
+            "proposal_id": self.proposal_id,
+            "proposal_hash": self.proposal_hash,
+            "action": self.action,
+            "actor_id": self.actor_id,
+            "thread_id": self.thread_id,
+            "message_ids": list(self.message_ids),
+            "recipients": list(self.recipients),
+            "attachment_ids": list(self.attachment_ids),
+            "content": self.content,
+            "parameters": dict(self.parameters),
+        }
 
 
 class VMGAPolicy:
@@ -863,7 +901,7 @@ class VMGAGmailAdapter:
         self, action: str, actor_id: str, thread_id: Optional[str] = None,
         message_ids: Optional[List[str]] = None, content: Optional[str] = None,
         recipients: Optional[List[str]] = None, attachment_ids: Optional[List[str]] = None,
-        justification: str = "", sender: str = "",
+        parameters: Optional[Dict[str, Any]] = None, justification: str = "", sender: str = "",
     ) -> Dict[str, Any]:
         gmail_action = GmailAction.from_string(action)
         if gmail_action is None:
@@ -892,7 +930,7 @@ class VMGAGmailAdapter:
             proposal_id=f"vmga_{hashlib.sha256(f'{actor_id}{action}{thread_id}{now.isoformat()}'.encode()).hexdigest()[:16]}",
             action=gmail_action, actor_id=actor_id, thread_id=thread_id,
             message_ids=message_ids or [], content=content, recipients=recipients or [],
-            attachment_ids=attachment_ids or [], justification=justification,
+            attachment_ids=attachment_ids or [], parameters=parameters or {}, justification=justification,
             requested_at=now.isoformat(),
         )
         
@@ -1126,7 +1164,13 @@ class VMGAGmailAdapter:
         
         try:
             result = self.vesta.execute(request, executor_fn)
-            execution_result = {"status": "SUCCESS", "request_id": result.request_id, "duration_ms": result.duration_ms}
+            tool_output = getattr(result, "tool_output", getattr(result, "output", None))
+            execution_result = {
+                "status": "SUCCESS",
+                "request_id": result.request_id,
+                "duration_ms": result.duration_ms,
+                "tool_output": tool_output,
+            }
             success = True
         except Exception as e:
             error_info = str(e)
