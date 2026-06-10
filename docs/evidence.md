@@ -16,6 +16,8 @@ tagged release or live deployment without overstating VMGA's security boundary.
 - Broker health output, VMGA operator proposal listing, gog auth health, Hermes
   plugin status, OpenClaw plugin status, and OpenClaw doctor/security outputs
   when a local deployment is being claimed
+- Runtime posture output, including agent roots supplied to the check and any
+  direct-bypass attestation evidence reference
 - Any deployment-specific evidence required by `docs/deployment_runbook.md`
 - Correlation IDs for proposal, state, approval, and execution events when a
   request lifecycle is being traced.

@@ -34,9 +34,13 @@ processes and technologies change.
   approval verifier secrets, and broker bearer tokens must live outside the
   agent authority domain for hard-enforcement claims.
 - `REL-004` Secure Configuration: Example policies should use strict defaults,
-  placeholder values, and explicit denial for unknown or ambiguous behavior.
+  placeholder values, explicit denial for unknown or ambiguous behavior, and
+  runtime posture output that fails toward advisory or cannot-determine when
+  required roots, anchors, or bypass evidence are missing.
 - `REL-005` Security Policy Enforcement: VMGA should fail closed when policy,
-  approval, state, backend, or evidence requirements are missing.
+  approval, state, backend, evidence, or posture-readiness requirements are
+  missing. Posture results are deployment evidence, not a replacement for
+  concrete bypass, credential-isolation, approval, and ledger checks.
 - `REL-008` Secure Release Management: Tagged releases should have a release
   checklist, changelog, tests, security-scan status, and explicit claim
   boundaries.
@@ -62,5 +66,7 @@ or link:
   preconditions.
 - Sample redacted VMGA evidence ledger entries for allow, review-required, deny,
   approval, execution, lockdown, and reset paths.
+- Runtime posture output for the deployment under review, with explicit
+  agent-readable roots and any direct-bypass attestation evidence reference.
 - Deployment-specific bypass evidence for Hermes, OpenClaw, gogcli, and any
   other mailbox-capable runtime surface being claimed.

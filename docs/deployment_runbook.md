@@ -60,7 +60,8 @@ Health and recovery checks:
 ```bash
 curl -fsS http://127.0.0.1:8765/health
 curl -fsS http://127.0.0.1:8765/v1/posture
-vmga-operator --json posture
+vmga-operator --json posture --local \
+  --agent-root /path/to/agent/workspace
 vmga-operator --state-db /path/outside/agent/state.sqlite3 list
 vmga-verify-evidence /path/outside/agent/evidence.jsonl --json
 ```
@@ -76,6 +77,18 @@ supplies `--attest-no-direct-bypass` and a `--direct-bypass-evidence` reference.
 If the posture mode is `advisory` or `cannot_determine`, describe the
 deployment that way until missing credential-isolation, direct-bypass, and
 evidence-anchor proof is collected.
+
+Use `--attest-no-direct-bypass` only after collecting evidence that the
+mailbox-capable agent cannot reach direct Gmail, Workspace, browser, CLI, MCP,
+cron, or plugin write paths outside VMGA. Include a durable reference with
+`--direct-bypass-evidence`; do not use a bare attestation as a substitute for
+reviewable deployment evidence.
+
+The posture self-check reports configured intent and observable placement, not
+proof that every configured enforcement path has executed. Until the v0.3.0
+evidence-integrity and approval-signature implementations ship, `hmac_chain`
+evidence and `signature` approval modes are design gates rather than active
+hard-enforcement proof.
 
 If `/health` reports lockdown, inspect evidence first, then reset only through
 an operator-controlled maintenance path. `reset_lockdown` is an in-process
@@ -244,6 +257,8 @@ tokens and policy files, describe the deployment as advisory governance only.
   agent.
 - Policy file hash and deployment config hash.
 - Broker health output and VMGA operator proposal listing.
+- Runtime posture output, including supplied agent roots and any direct-bypass
+  attestation evidence reference.
 - `gog-agent-safe` version and gog auth health, redacted.
 - Hermes plugin status and VMGA handler smoke output, redacted.
 - OpenClaw doctor, plugin inspect, secrets audit, sandbox explain, and approvals

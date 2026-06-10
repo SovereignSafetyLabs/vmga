@@ -4,6 +4,16 @@ All notable changes to VMGA will be documented here.
 
 ## Unreleased
 
+- Added the runtime enforcement posture self-check (`/v1/posture`,
+  `vmga-operator posture`, and broker startup summaries) so operators can see
+  when a deployment is advisory, cannot be determined, or hard-ready under
+  explicit evidence.
+- Tightened posture checks to avoid optimistic path-isolation results: agent
+  roots must be supplied explicitly, and direct Gmail/Workspace bypass closure
+  requires an evidence-referenced operator attestation.
+- Added v0.3.0 design records for tamper-evident evidence and asymmetric
+  out-of-domain approval signatures.
+
 ## v0.2.1 - 2026-06-10
 
 ### Security

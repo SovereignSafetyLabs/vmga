@@ -25,6 +25,21 @@ Production enforcement requires deployment controls outside this package:
 Without those controls, VMGA should be described as advisory governance or a
 reference control pattern, not hard isolation.
 
+VMGA includes a runtime posture self-check (`/v1/posture` and
+`vmga-operator posture`) to make that boundary visible at startup and during
+operator review. Treat `advisory` or `cannot_determine` as the deployment's
+actual posture until the missing evidence is resolved. The self-check is not a
+formal sandbox proof: it reports what VMGA can observe from configuration and
+operator-supplied attestations, and it deliberately fails toward unknown rather
+than optimistic hard-ready claims.
+
+Two v0.3.0 security properties are designed but not yet implemented:
+tamper-evident evidence (`docs/evidence_integrity_design.md`) and asymmetric
+out-of-domain approval signatures (`docs/approval_signing_design.md`). Until
+those land, evidence remains append-only JSONL with advisory verification, and
+approvals remain HMAC-based. Do not claim a hard evidence-integrity or
+out-of-domain approval boundary from configuration strings alone.
+
 ### Known Integration Advisory
 
 VMGA's core broker path does not depend on OpenClaw. The optional OpenClaw
@@ -108,7 +123,18 @@ direct-bypass or credential-isolation checks must be resolved with operator
 evidence before making hard-boundary claims. Path-isolation checks report
 `unknown` unless the operator supplies the agent-readable root with
 `--agent-root`; direct-bypass closure requires explicit operator attestation
-with an evidence reference.
+with an evidence reference. For example:
+
+```bash
+vmga-operator --json posture --local \
+  --agent-root /path/to/agent/workspace \
+  --attest-no-direct-bypass \
+  --direct-bypass-evidence docs/deployment-evidence/no-direct-gmail.md
+```
+
+Only use the attestation flags after collecting real evidence that the
+mailbox-capable agent cannot reach direct Gmail, Workspace, browser, CLI, MCP,
+cron, or plugin write paths outside VMGA.
 
 For a real-account smoke test, run the broker first and then opt in explicitly:
 

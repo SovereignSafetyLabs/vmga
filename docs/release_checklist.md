@@ -62,5 +62,14 @@ deploying VMGA with live mailbox credentials.
 - Verify CI-safe mocks use the same broker request contract as the real broker.
 - Verify gogcli rate-limit handling returns structured VMGA errors after
   bounded exponential backoff.
+- Run the runtime posture self-check for any live deployment claim. Supply
+  explicit `--agent-root` values and retain any `--direct-bypass-evidence`
+  reference used with `--attest-no-direct-bypass`.
+- Verify posture output does not claim hard-ready from configuration strings
+  alone. Until the v0.3.0 implementations land, `hmac_chain` evidence and
+  `signature` approvals are design-stage requirements, not active proof.
+- For v0.3.0 or later tags, verify evidence-integrity and approval-signature
+  acceptance gates in `docs/evidence_integrity_design.md` and
+  `docs/approval_signing_design.md` before making hard-boundary claims.
 - Verify `SECURITY.md` has a monitored reporting path.
 - Record DSOVS self-assessment evidence in `docs/dsovs_readiness.md`.
