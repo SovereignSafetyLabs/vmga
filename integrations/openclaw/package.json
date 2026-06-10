@@ -18,7 +18,7 @@
     "openclaw": ">=2026.6.5"
   },
   "dependencies": {
-    "typebox": "^1.1.38"
+    "typebox": "^1.2.8"
   },
   "devDependencies": {
     "openclaw": "latest",
