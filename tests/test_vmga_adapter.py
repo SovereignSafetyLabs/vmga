@@ -162,6 +162,31 @@ class TestVMGAPolicy:
         assert decision.rule_id == "vmga_not_allowed"
         assert decision.error_code == "vmga_not_allowed"
 
+    def test_non_kinetic_read_allows_unknown_sender_risk(self):
+        rules = {
+            "allowed_actions": ["read"],
+            "content_analysis": {"enforce_risk_threshold": True, "max_risk_score_auto_allow": 0},
+        }
+        policy = VMGAPolicy("test", rules)
+        proposal = VMGAProposal(proposal_id="prop_1", action=GmailAction.READ, actor_id="agent_1")
+        decision = policy.evaluate(proposal, ContentRisk(unknown_sender=True))
+        assert decision.allowed == True
+        assert decision.rule_id == "vmga_non_kinetic_allow"
+
+    def test_kinetic_draft_still_requires_review_with_risk_threshold(self):
+        rules = {
+            "allowed_actions": ["create_draft"],
+            "kinetic_requires_approval": True,
+            "draft_policy": {"require_justification": False, "allow_external_recipients": True},
+            "content_analysis": {"enforce_risk_threshold": True, "max_risk_score_auto_allow": 0},
+            "high_risk_indicators": ["payment_mention"],
+        }
+        policy = VMGAPolicy("test", rules)
+        proposal = VMGAProposal(proposal_id="prop_1", action=GmailAction.CREATE_DRAFT, actor_id="agent_1")
+        decision = policy.evaluate(proposal, ContentRisk(payment_mention=True))
+        assert decision.allowed == False
+        assert decision.rule_id == "vmga_high_risk_review_required"
+
     def test_policy_loader_validates_yaml(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             policy_path = Path(tmpdir) / "bad_policy.yaml"

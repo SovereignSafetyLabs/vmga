@@ -157,6 +157,39 @@ def test_broker_executes_allowed_search_through_backend():
         assert backend.max_results == 2
 
 
+def test_broker_allows_hermes_style_search_without_sender():
+    class SearchBackend:
+        def search(self, query, max_results=10):
+            return {"status": "SUCCESS", "messages": [{"message_id": "m1"}]}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = VMGAGmailAdapter(
+            vesta_adapter=MockVesta(),
+            profile="draft_assist",
+            policy_rules={
+                "allowed_actions": ["read", "create_draft"],
+                "kinetic_requires_approval": True,
+                "content_analysis": {"enforce_risk_threshold": True, "max_risk_score_auto_allow": 0},
+            },
+            state_store=SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")),
+            approval_secret="test_secret",
+        )
+        broker = VMGABroker(adapter, backend=SearchBackend())
+
+        result = broker.propose(
+            {
+                "action": "read",
+                "actor_id": "hermes-actor",
+                "search_query": "in:inbox",
+                "max_results": 1,
+            }
+        )
+
+        assert result["status"] == "ALLOW"
+        assert result["risk_flags"] == ["unknown_sender"]
+        assert result["backend_result"]["status"] == "SUCCESS"
+
+
 def test_evidence_verifier_accepts_valid_sequence_and_rejects_token_leak():
     proposal_hash = "sha256:" + "a" * 64
     events = [

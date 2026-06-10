@@ -513,8 +513,6 @@ class VMGAPolicy:
                 return self._decision(False, "Payment instructions denied by baseline policy", "vmga_baseline_financial_deny")
         
         if action_class == ActionClass.NON_KINETIC:
-            if self.enforce_risk_threshold and content_risk.score > self.max_risk_score_auto_allow:
-                return self._decision(False, f"Risk score {content_risk.score} exceeds threshold", "vmga_risk_threshold_exceeded")
             return self._decision(True, "Non-kinetic action within policy", "vmga_non_kinetic_allow")
         
         if action_class == ActionClass.KINETIC:
