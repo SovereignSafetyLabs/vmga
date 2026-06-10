@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -31,6 +32,8 @@ class GogCLIBackend:
     gmail_no_send: bool = True
     wrap_untrusted: bool = True
     enable_commands_exact: str = DEFAULT_ALLOWED_COMMANDS
+    max_retries: int = 2
+    backoff_initial_seconds: float = 1.0
 
     def __post_init__(self) -> None:
         if self.binary:
@@ -57,10 +60,14 @@ class GogCLIBackend:
             command.extend(["--client", self.client])
         return command
 
-    def _run(self, args: List[str], *, input_text: Optional[str] = None) -> Dict[str, Any]:
-        command = self._base_command() + args
+    @staticmethod
+    def _is_rate_limited(stdout: str, stderr: str) -> bool:
+        combined = f"{stdout}\n{stderr}".lower()
+        return any(token in combined for token in ["rate limit", "ratelimit", "quota", "too many requests", " 429", "429"])
+
+    def _run_once(self, command: List[str], *, input_text: Optional[str] = None) -> subprocess.CompletedProcess[str] | Dict[str, Any]:
         try:
-            completed = subprocess.run(
+            return subprocess.run(
                 command,
                 input=input_text,
                 text=True,
@@ -83,12 +90,30 @@ class GogCLIBackend:
                 "error": f"gog command timed out after {self.timeout_seconds} seconds",
             }
 
+    def _run(self, args: List[str], *, input_text: Optional[str] = None) -> Dict[str, Any]:
+        command = self._base_command() + args
+        attempts = 0
+        completed: subprocess.CompletedProcess[str] | Dict[str, Any]
+        while True:
+            completed = self._run_once(command, input_text=input_text)
+            if isinstance(completed, dict):
+                return completed
+            if completed.returncode == 0:
+                break
+            if not self._is_rate_limited(completed.stdout, completed.stderr) or attempts >= self.max_retries:
+                break
+            delay = self.backoff_initial_seconds * (2 ** attempts)
+            time.sleep(delay)
+            attempts += 1
+
         if completed.returncode != 0:
+            rate_limited = self._is_rate_limited(completed.stdout, completed.stderr)
             return {
                 "status": "ERROR",
                 "backend": "gogcli",
-                "error_code": "vmga_gogcli_failed",
+                "error_code": "vmga_gogcli_rate_limited" if rate_limited else "vmga_gogcli_failed",
                 "exit_code": completed.returncode,
+                "attempts": attempts + 1,
                 "stdout": _cap_text(completed.stdout.strip()),
                 "stderr": _cap_text(completed.stderr.strip()),
             }

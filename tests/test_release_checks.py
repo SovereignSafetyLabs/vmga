@@ -11,10 +11,22 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = ROOT / "scripts" / "vmga_release_check.py"
+EVIDENCE_SCRIPT_PATH = ROOT / "scripts" / "build_vmga_evidence.py"
 
 
 def _load_release_checker():
     spec = importlib.util.spec_from_file_location("vmga_release_check", SCRIPT_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    import sys
+
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_evidence_builder():
+    spec = importlib.util.spec_from_file_location("build_vmga_evidence", EVIDENCE_SCRIPT_PATH)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     import sys
@@ -112,6 +124,16 @@ def test_release_check_flags_secret_like_content(tmp_path: Path) -> None:
     assert any(item.code == "secret_pattern_github_token" for item in report.errors)
 
 
+def test_release_check_flags_personal_gmail_addresses_in_public_docs(tmp_path: Path) -> None:
+    _populate_safe_repo(tmp_path)
+    _write(tmp_path / "docs" / "unsafe.md", "operator mailbox: person@gmail.com\n")
+    checker = _load_release_checker()
+
+    report = checker.run_release_check(tmp_path)
+
+    assert any(item.code == "public_identity_gmail_address" for item in report.errors)
+
+
 def test_release_check_reports_missing_required_file(tmp_path: Path) -> None:
     _populate_safe_repo(tmp_path)
     (tmp_path / "CONTRIBUTING.md").unlink()
@@ -121,3 +143,19 @@ def test_release_check_reports_missing_required_file(tmp_path: Path) -> None:
 
     assert any(item.code == "required_file_missing" for item in report.errors)
     assert any(item.path and item.path.endswith("CONTRIBUTING.md") for item in report.errors)
+
+
+def test_release_evidence_bundle_redacts_local_values(tmp_path: Path) -> None:
+    builder = _load_evidence_builder()
+    out = tmp_path / "release"
+
+    result = builder.build_release_bundle(
+        out,
+        broker_url="http://127.0.0.1:9",
+        redact_value=["operator@example.com"],
+    )
+
+    payload = (out / "release_evidence.json").read_text(encoding="utf-8")
+    assert result == 0
+    assert "operator@example.com" not in payload
+    assert "operator_evidence_slots" in payload

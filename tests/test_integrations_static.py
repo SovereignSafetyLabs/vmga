@@ -74,6 +74,7 @@ def test_hermes_handler_returns_json_and_posts_to_broker():
         captured.update(
             {
                 "url": req.full_url,
+                "auth": req.headers.get("Authorization"),
                 "payload": json.loads(req.data.decode("utf-8")) if req.data else {},
             }
         )
@@ -84,12 +85,14 @@ def test_hermes_handler_returns_json_and_posts_to_broker():
             hermes_tools.mail_search(
                 {"query": "from:test@example.com", "max_results": 7},
                 broker_url="https://vmga.example.invalid",
+                broker_token="broker-token",
             )
         )
 
     assert output["status"] == "OK"
     assert output["tool"] == "mail_search"
     assert captured["url"] == "https://vmga.example.invalid/v1/proposals"
+    assert captured["auth"] == "Bearer broker-token"
     assert captured["payload"]["action"] == "read"
     assert captured["payload"]["search_query"] == "from:test@example.com"
 
@@ -130,6 +133,7 @@ def test_openclaw_manifest_and_route_contract():
     manifest = json.loads((ROOT / "integrations" / "openclaw" / "openclaw.plugin.json").read_text(encoding="utf-8"))
 
     assert manifest["id"] == "plugin.vmga"
+    assert "broker_token" in manifest["configSchema"]["properties"]
     assert "broker_timeout_seconds" in manifest["configSchema"]["properties"]
     assert manifest["contracts"]["tools"] == [
         "mail_search",
@@ -158,6 +162,7 @@ def test_openclaw_adapter_posts_to_broker_with_expected_payload_shape():
         captured.update(
             {
                 "url": req.full_url,
+                "auth": req.headers.get("Authorization"),
                 "payload": json.loads(req.data.decode("utf-8")),
             }
         )
@@ -176,11 +181,12 @@ def test_openclaw_adapter_posts_to_broker_with_expected_payload_shape():
     )
 
     with patch("integrations.openclaw.profile_adapter.urllib_request.urlopen", fake_urlopen):
-        output = VMGAOpenClawProfileAdapter("https://vmga.example.invalid").execute(request)
+        output = VMGAOpenClawProfileAdapter("https://vmga.example.invalid", bearer_token="broker-token").execute(request)
 
     assert output["status"] == "OK"
     assert output["tool"] == "mail_send"
     assert captured["url"] == "https://vmga.example.invalid/v1/proposals"
+    assert captured["auth"] == "Bearer broker-token"
     assert captured["payload"]["action"] == "send"
     assert captured["payload"]["actor_id"] == "openclaw-operator"
 
@@ -226,3 +232,14 @@ def test_examples_reference_placeholder_broker_urls_only():
 
     assert hermes["hermes_plugin"]["broker_default"]["url"] == "https://vmga.example.invalid"
     assert openclaw["vmga"]["broker_url"] == "https://vmga.example.invalid"
+
+
+def test_runtime_docs_distinguish_plugin_loaded_from_gateway_ready():
+    openclaw_doc = (ROOT / "docs" / "openclaw_integration.md").read_text(encoding="utf-8")
+    hermes_doc = (ROOT / "docs" / "hermes_integration.md").read_text(encoding="utf-8")
+
+    assert "Local Gateway Readiness" in openclaw_doc
+    assert "plugin.vmga` being loaded proves only" in openclaw_doc
+    assert "openclaw doctor" in openclaw_doc
+    assert "Runtime Verification" in hermes_doc
+    assert "VMGA_BROKER_TOKEN" in hermes_doc

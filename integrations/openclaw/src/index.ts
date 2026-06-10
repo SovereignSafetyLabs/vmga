@@ -7,6 +7,7 @@ const BROKER_ENDPOINT = "/v1/proposals";
 const ConfigSchema = Type.Object(
   {
     broker_url: Type.Optional(Type.String({ description: "VMGA broker base URL." })),
+    broker_token: Type.Optional(Type.String({ description: "Optional VMGA broker bearer token." })),
     broker_timeout_seconds: Type.Optional(Type.Number({ minimum: 1, maximum: 120 })),
   },
   { additionalProperties: false },
@@ -103,16 +104,20 @@ function buildPayload(toolName: string, action: string, params: JsonMap): JsonMa
   return payload;
 }
 
-async function postToBroker(config: { broker_url?: string; broker_timeout_seconds?: number }, payload: JsonMap): Promise<JsonMap> {
+async function postToBroker(config: { broker_url?: string; broker_token?: string; broker_timeout_seconds?: number }, payload: JsonMap): Promise<JsonMap> {
   const brokerUrl = (config.broker_url || DEFAULT_BROKER_URL).replace(/\/+$/, "");
   const timeoutMs = Math.max(1, config.broker_timeout_seconds ?? 10) * 1000;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json" };
+  if (config.broker_token) {
+    headers.Authorization = `Bearer ${config.broker_token}`;
+  }
 
   try {
     const response = await fetch(`${brokerUrl}${BROKER_ENDPOINT}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers,
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
@@ -144,7 +149,7 @@ async function postToBroker(config: { broker_url?: string; broker_timeout_second
 }
 
 function toolHandler(toolName: string, action: string) {
-  return async (params: JsonMap, config: { broker_url?: string; broker_timeout_seconds?: number }) => {
+  return async (params: JsonMap, config: { broker_url?: string; broker_token?: string; broker_timeout_seconds?: number }) => {
     const payload = buildPayload(toolName, action, params);
     const result = await postToBroker(config, payload);
     return { tool: toolName, ...result };

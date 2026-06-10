@@ -10,6 +10,10 @@
         "type": "string",
         "description": "VMGA broker base URL."
       },
+      "broker_token": {
+        "type": "string",
+        "description": "Optional VMGA broker bearer token."
+      },
       "broker_timeout_seconds": {
         "type": "number",
         "minimum": 1,

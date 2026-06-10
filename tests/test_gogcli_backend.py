@@ -91,6 +91,19 @@ def test_gogcli_denies_send_even_if_called_directly():
     assert result["error_code"] == "vmga_gogcli_action_denied"
 
 
+def test_gogcli_retries_rate_limits_with_backoff():
+    rate_limited = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="HTTP 429 rate limit")
+    success = subprocess.CompletedProcess(args=[], returncode=0, stdout='{"messages":[]}', stderr="")
+    with patch("vmga.backends.gogcli.subprocess.run", side_effect=[rate_limited, success]) as run:
+        with patch("vmga.backends.gogcli.time.sleep") as sleep:
+            backend = GogCLIBackend(binary="/opt/homebrew/bin/gog-agent-safe", backoff_initial_seconds=0.25)
+            result = backend.search("in:inbox", max_results=1)
+
+    assert run.call_count == 2
+    sleep.assert_called_once_with(0.25)
+    assert result["status"] == "SUCCESS"
+
+
 def test_executor_passes_approval_bound_payload_to_backend():
     class CapturingBackend:
         def __init__(self):

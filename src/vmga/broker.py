@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional
+from collections.abc import Mapping
 
+from .broker_contract import validate_broker_proposal_payload
 from .executor import VMGAExecutor
 from .vmga_adapter import VMGAGmailAdapter
 
@@ -24,6 +27,11 @@ class VMGABroker:
         }
 
     def propose(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        correlation_id = str(payload.get("correlation_id") or uuid.uuid4()) if isinstance(payload, Mapping) else str(uuid.uuid4())
+        try:
+            payload = validate_broker_proposal_payload(payload)
+        except ValueError as exc:
+            return {"status": "DENY", "error_code": "vmga_broker_bad_request", "error": str(exc), "correlation_id": correlation_id}
         allowed = {
             "action", "actor_id", "thread_id", "message_ids", "content",
             "recipients", "attachment_ids", "parameters", "justification", "sender",
@@ -34,14 +42,18 @@ class VMGABroker:
         }
         kwargs = {key: value for key, value in payload.items() if key in allowed}
         parameters = dict(kwargs.get("parameters") or {})
+        metadata = dict(parameters.get("metadata") or {})
+        metadata["correlation_id"] = correlation_id
+        parameters["metadata"] = metadata
+        parameters["correlation_id"] = correlation_id
         for key in parameter_keys:
             if key in payload and payload[key] is not None:
                 parameters[key] = payload[key]
-        if parameters:
-            kwargs["parameters"] = parameters
+        kwargs["parameters"] = parameters
         if "action" not in kwargs or "actor_id" not in kwargs:
-            return {"status": "DENY", "error_code": "vmga_broker_bad_request", "error": "action and actor_id are required"}
+            return {"status": "DENY", "error_code": "vmga_broker_bad_request", "error": "action and actor_id are required", "correlation_id": correlation_id}
         result = self.adapter.propose_action(**kwargs)
+        result["correlation_id"] = correlation_id
         backend_result = self._execute_allowed_non_kinetic(kwargs, result)
         if backend_result is not None:
             result["backend_result"] = backend_result

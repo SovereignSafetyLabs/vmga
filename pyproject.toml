@@ -30,7 +30,9 @@ gogcli = []
 [project.scripts]
 vmga-verify-evidence = "vmga.cli:verify_evidence_main"
 vmga-approval-token = "vmga.cli:approval_token_main"
+vmga-operator = "vmga.cli:operator_main"
 vmga-broker = "vmga.cli:broker_main"
+vmga-live-smoke = "vmga.live_smoke:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
