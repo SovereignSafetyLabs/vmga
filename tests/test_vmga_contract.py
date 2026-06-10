@@ -333,6 +333,30 @@ def test_approval_single_use_is_locked_for_concurrent_execution():
         assert sum(1 for output in outputs if output.get("error_code") == "vmga_approval_already_used") == 1
 
 
+def test_approval_mutation_is_locked_for_concurrent_approval():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        result = adapter.propose_action("create_draft", "agent_1", content="Draft", justification="Test")
+        token = adapter.compute_approval_token(result["proposal_id"], result["proposal_hash"], "operator_1")
+        outputs = []
+        output_lock = threading.Lock()
+
+        def approve_once():
+            outcome = adapter.approve_proposal(result["proposal_id"], "operator_1", token)
+            with output_lock:
+                outputs.append(outcome)
+
+        threads = [threading.Thread(target=approve_once), threading.Thread(target=approve_once)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=3)
+
+        statuses = sorted(output["status"] for output in outputs)
+        assert statuses == ["APPROVED", "ERROR"]
+        assert sum(1 for output in outputs if output.get("error_code") == "vmga_proposal_not_found") == 1
+
+
 def test_proposal_evidence_redacts_and_caps_agent_text():
     with tempfile.TemporaryDirectory() as tmpdir:
         vesta = MockVesta()
