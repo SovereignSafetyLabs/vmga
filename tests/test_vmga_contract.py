@@ -1,5 +1,7 @@
 import json
+import sqlite3
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -102,6 +104,15 @@ def test_sqlite_state_persists_approval_used_flag():
         assert replay["error_code"] == "vmga_approval_already_used"
 
 
+def test_sqlite_state_uses_wal_and_busy_timeout():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "vmga.sqlite3")
+        SQLiteStateStore(db_path)
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+            assert conn.execute("PRAGMA busy_timeout").fetchone()[0] >= 5000
+
+
 def test_fake_backend_records_executor_operation():
     with tempfile.TemporaryDirectory() as tmpdir:
         adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
@@ -123,6 +134,9 @@ def test_broker_propose_and_execute_fail_closed_without_executor():
         bad = broker.propose({"action": "create_draft"})
         assert bad["status"] == "DENY"
         assert bad["error_code"] == "vmga_broker_bad_request"
+        unknown = broker.propose({"action": "read", "actor_id": "agent_1", "surprise": True})
+        assert unknown["status"] == "DENY"
+        assert unknown["error_code"] == "vmga_broker_bad_request"
         denied = broker.execute({"proposal_id": "p", "proposal_hash": "h", "approval_token": "t"})
         assert denied["error_code"] == "vmga_executor_unavailable"
 
@@ -156,6 +170,40 @@ def test_broker_executes_allowed_search_through_backend():
         assert result["backend_result"]["status"] == "SUCCESS"
         assert backend.query == "from:test@example.com"
         assert backend.max_results == 2
+
+
+def test_broker_injects_correlation_id_into_results_and_evidence():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        vesta = MockVesta()
+        adapter = VMGAGmailAdapter(
+            vesta_adapter=vesta,
+            profile="draft_assist",
+            policy_rules={
+                "allowed_actions": ["read", "create_draft"],
+                "kinetic_requires_approval": True,
+                "draft_policy": {"allow_external_recipients": True, "require_justification": True},
+            },
+            state_store=SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")),
+            approval_secret="test_secret",
+        )
+        broker = VMGABroker(adapter)
+
+        result = broker.propose(
+            {
+                "action": "create_draft",
+                "actor_id": "agent_1",
+                "recipients": ["ops@example.com"],
+                "content": "Draft",
+                "justification": "Test",
+                "correlation_id": "trace-1",
+            }
+        )
+
+        assert result["status"] == "REVIEW_REQUIRED"
+        assert result["correlation_id"] == "trace-1"
+        events = vesta.audit_ledger.events
+        assert any(event["event_type"] == "vmga_state_saved" and event["correlation_id"] == "trace-1" for event in events)
+        assert any(event["event_type"] == "vmga_proposal_received" and event["correlation_id"] == "trace-1" for event in events)
 
 
 def test_broker_allows_hermes_style_search_without_sender():
@@ -213,6 +261,17 @@ def test_jsonl_ledger_and_cli_verifier_shape(tmp_path):
     assert ledger.read_all()[0]["proposal_id"] == "p1"
 
 
+def test_jsonl_ledger_rotates_before_disk_growth(tmp_path):
+    ledger_path = tmp_path / "evidence.jsonl"
+    ledger = JSONLVMGALedger(ledger_path, rotate_bytes=80, backup_count=2)
+
+    ledger.append(evidence_event("vmga_proposal_received", proposal_id="p1", policy_state="ALLOW"))
+    ledger.append(evidence_event("vmga_proposal_received", proposal_id="p2", policy_state="ALLOW"))
+
+    assert ledger_path.exists()
+    assert (tmp_path / "evidence.jsonl.1").exists()
+
+
 def test_approval_token_cli_matches_adapter(monkeypatch, capsys):
     with tempfile.TemporaryDirectory() as tmpdir:
         adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
@@ -234,3 +293,9 @@ def test_approval_token_cli_matches_adapter(monkeypatch, capsys):
 
         assert exit_code == 0
         assert capsys.readouterr().out.strip() == expected
+
+
+def test_approval_time_window_uses_five_minute_buckets():
+    now = datetime(2026, 6, 10, 4, 17, 30, tzinfo=timezone.utc)
+
+    assert VMGAGmailAdapter.approval_time_window(now) == "2026-06-10-04-15"

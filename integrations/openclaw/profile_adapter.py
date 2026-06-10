@@ -81,10 +81,12 @@ class VMGAOpenClawProfileAdapter:
         broker_url: str,
         *,
         timeout_seconds: float = 2.5,
+        bearer_token: Optional[str] = None,
         extra_map: Optional[Mapping[str, str]] = None,
     ):
         self.broker_url = broker_url
         self.timeout_seconds = timeout_seconds
+        self.bearer_token = bearer_token
         self.tool_map = dict(OPENCLAW_TOOL_MAP)
         if extra_map:
             for key, value in extra_map.items():
@@ -137,11 +139,14 @@ class VMGAOpenClawProfileAdapter:
 
         try:
             request_payload = json.dumps(payload, sort_keys=True).encode("utf-8")
+            headers = {"Content-Type": "application/json", "Accept": "application/json"}
+            if self.bearer_token:
+                headers["Authorization"] = f"Bearer {self.bearer_token}"
             req = urllib_request.Request(
                 self.broker_url.rstrip("/") + BROKER_ENDPOINT,
                 data=request_payload,
                 method="POST",
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                headers=headers,
             )
             with urllib_request.urlopen(req, timeout=self.timeout_seconds) as response:
                 response_json = json.loads(response.read().decode("utf-8"))

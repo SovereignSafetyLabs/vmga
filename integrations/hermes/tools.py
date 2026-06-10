@@ -58,6 +58,18 @@ def _resolve_broker_url(args: Any, kwargs: Dict[str, Any]) -> str:
     raise RuntimeError("VMGA_BROKER_URL is required")
 
 
+def _resolve_broker_token(args: Any, kwargs: Dict[str, Any]) -> Optional[str]:
+    if isinstance(args, dict) and isinstance(args.get("broker_token"), str) and args["broker_token"].strip():
+        return args["broker_token"].strip()
+    broker_token = kwargs.get("broker_token")
+    if isinstance(broker_token, str) and broker_token.strip():
+        return broker_token.strip()
+    env_broker_token = os.getenv("VMGA_BROKER_TOKEN")
+    if isinstance(env_broker_token, str) and env_broker_token.strip():
+        return env_broker_token.strip()
+    return None
+
+
 def _send_to_broker(tool_name: str, payload: Dict[str, Any], args: Any, kwargs: Dict[str, Any]) -> str:
     try:
         broker_url = _resolve_broker_url(args, kwargs)
@@ -73,6 +85,9 @@ def _send_to_broker(tool_name: str, payload: Dict[str, Any], args: Any, kwargs: 
             method="POST",
             headers={"Content-Type": "application/json", "Accept": "application/json"},
         )
+        broker_token = _resolve_broker_token(args, kwargs)
+        if broker_token:
+            req.add_header("Authorization", f"Bearer {broker_token}")
         with request.urlopen(req, timeout=BROKER_TIMEOUT_SECONDS) as response:
             body = response.read()
     except error.URLError as exc:

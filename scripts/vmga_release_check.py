@@ -21,6 +21,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from vmga.vmga_adapter import load_vmga_policy
+from vmga.redaction import SECRET_PATTERNS
 
 
 @dataclass(frozen=True)
@@ -84,15 +85,8 @@ CLAIM_HYGIENE_PATTERNS: dict[str, re.Pattern[str]] = {
     "internals": re.compile(r"does not claim[\s\S]{0,260}?security of Hermes/OpenClaw internals", re.IGNORECASE),
 }
 
-SECRET_PATTERNS: dict[str, re.Pattern[str]] = {
-    "aws_access_key": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-    "azure_key": re.compile(r"\bASIA[0-9A-Z]{16}\b"),
-    "google_api_key": re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
-    "github_token": re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
-    "slack_token": re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
-    "stripe_secret": re.compile(r"\bsk-(?:live|test)-[A-Za-z0-9]{16,}\b"),
-    "google_oauth_token": re.compile(r"\bya29\.[0-9A-Za-z_-]{20,}\b"),
-    "private_key_block": re.compile(r"-----BEGIN (?:[A-Z ]+)?PRIVATE KEY-----"),
+PUBLIC_IDENTITY_PATTERNS: dict[str, re.Pattern[str]] = {
+    "gmail_address": re.compile(r"\b[A-Za-z0-9._%+-]+@gmail\.com\b", re.IGNORECASE),
 }
 
 
@@ -214,6 +208,7 @@ def run_release_check(root: Path | str | None = None) -> ReleaseReport:
 
     _check_claim_hygiene(report, scannable_files)
     _scan_patterns(report, scannable_files, SECRET_PATTERNS, severity="error", code_prefix="secret_pattern")
+    _scan_patterns(report, scannable_files, PUBLIC_IDENTITY_PATTERNS, severity="error", code_prefix="public_identity")
 
     return report
 

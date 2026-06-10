@@ -154,6 +154,32 @@ For a VMGA Hermes plugin:
 - Treat agent-loop tools such as memory, session search, and delegation as
   separate context surfaces. They must not carry VMGA secrets or approval tokens.
 
+## Runtime Verification
+
+Before treating a Hermes session as VMGA-wired, verify the enabled plugin and
+broker path from the operator shell:
+
+```bash
+hermes plugins list
+curl -fsS http://127.0.0.1:8765/health
+```
+
+Expected state:
+
+- `vmga-mail` is enabled.
+- `VMGA_BROKER_URL` points at the VMGA broker.
+- If the broker uses bearer auth, `VMGA_BROKER_TOKEN` is available only to the
+  VMGA plugin process or operator-controlled wrapper.
+- `mail_search` returns a VMGA broker response for a safe read/search query.
+- `mail_create_draft` returns `REVIEW_REQUIRED`, `DENY`, or an approved VMGA
+  execution response; it does not call Gmail directly.
+- Missing or unreachable broker returns fail-closed JSON with a VMGA error code.
+
+Do not mark Hermes runtime wiring complete until the mailbox-capable Hermes
+profile has no native Gmail/Workspace write tools, direct `gog`/`gws` command
+surface, browser session capable of Gmail writes, or MCP/plugin path that can
+mutate Gmail outside VMGA.
+
 ## Gateway And Session Storage
 
 Hermes gateway session keys route messages using platform and chat context. They

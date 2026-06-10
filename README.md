@@ -65,12 +65,40 @@ export VMGA_APPROVAL_SECRET="replace-with-a-broker-secret"
 vmga-broker \
   --backend gogcli \
   --gog-binary /opt/homebrew/bin/gog-agent-safe \
-  --gog-home /path/outside/agent/workspace
+  --gog-home /path/outside/agent/workspace \
+  --ledger-rotate-bytes 10485760
 ```
 
 The gogcli backend starts with a narrow Gmail surface: search, read, and create
 draft. It always enables `--gmail-no-send`, `--no-input`, and an exact command
 allowlist. Gmail send remains denied by VMGA policy and by the backend.
+SQLite state uses WAL mode and a busy timeout for concurrent broker callers.
+Every broker proposal receives a correlation ID that is carried into evidence
+events for request tracing.
+
+Operator helpers:
+
+```bash
+vmga-operator --state-db /path/outside/agent/state.sqlite3 list
+vmga-operator --state-db /path/outside/agent/state.sqlite3 show <proposal-id>
+vmga-approval-token <proposal-id> <proposal-hash> <approver-id>
+vmga-operator approve <proposal-id> <approver-id> <approval-token>
+vmga-operator execute <proposal-id> <proposal-hash> <approval-token>
+```
+
+For a real-account smoke test, run the broker first and then opt in explicitly:
+
+```bash
+python scripts/vmga_live_smoke.py \
+  --live \
+  --broker-url http://127.0.0.1:8765 \
+  --safe-recipient operator@example.com
+```
+
+Add `--create-draft` only when a real Gmail draft is acceptable. The smoke test
+talks to VMGA, not directly to gog or Gmail, and writes a redacted transcript
+under `artifacts/`. Draft smoke tests include a `[VMGA-SMOKE]` subject/body tag
+so the operator can search for and bulk-delete generated drafts.
 
 ## Design Influences
 

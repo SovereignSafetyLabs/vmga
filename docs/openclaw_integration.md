@@ -51,6 +51,38 @@ For company-shared workflows, use a dedicated runtime identity: a dedicated
 machine, VM, container, or OS user; dedicated browser/profile/accounts; and no
 personal Google account or password-manager state in that runtime.
 
+## Local Gateway Readiness
+
+`plugin.vmga` being loaded proves only that OpenClaw can see the plugin. It does
+not prove the Gateway is ready for a mailbox-capable workflow.
+
+Minimum local readiness checks:
+
+```bash
+openclaw config set gateway.mode local
+openclaw doctor
+openclaw plugins inspect plugin.vmga
+openclaw security audit --deep
+openclaw secrets audit --check
+openclaw sandbox explain --json
+openclaw approvals get --gateway --json
+```
+
+The evidence should show:
+
+- Gateway mode is configured and the gateway can start.
+- Token auth or an equivalent local operator control is active.
+- A command owner is configured for privileged commands and approvals.
+- Session storage exists and is writable by the OpenClaw runtime only.
+- `plugin.vmga` is loaded from the intended source and points at the VMGA broker.
+- Sandbox and elevated exec posture cannot reach Gmail side effects outside
+  VMGA.
+- Direct Gmail, gog, gws, Workspace, shell, browser, MCP, or native mail write
+  paths are denied or unavailable to the mailbox-capable agent.
+
+Keep public or remote gateway exposure deferred until the same evidence is clean
+behind authenticated ingress or a private network boundary.
+
 ## Secrets And Credential Surfaces
 
 OpenClaw SecretRefs are useful for VMGA deployments, but they are not a

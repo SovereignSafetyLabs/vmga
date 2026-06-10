@@ -849,12 +849,44 @@ class VMGAGmailAdapter:
         self.state_store.save_pending_proposals(self.pending_proposals, self.proposal_ttl_seconds)
         self.state_store.save_approvals(self.approvals)
         self.state_store.save_lockdown_state(self.lockdown_active, self.denial_counts)
+
+    @staticmethod
+    def _proposal_correlation_id(proposal: Optional[VMGAProposal]) -> Optional[str]:
+        if proposal is None:
+            return None
+        metadata = proposal.parameters.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("correlation_id"):
+            return str(metadata["correlation_id"])
+        if proposal.parameters.get("correlation_id"):
+            return str(proposal.parameters["correlation_id"])
+        return None
+
+    def _log_state_saved(self, proposal: Optional[VMGAProposal], operation: str, correlation_id: Optional[str] = None) -> bool:
+        event = {
+            "event_type": "vmga_state_saved",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "proposal_id": proposal.proposal_id if proposal else None,
+            "proposal_hash": proposal.compute_hash() if proposal else None,
+            "actor_id": proposal.actor_id if proposal else None,
+            "operation": operation,
+            "correlation_id": correlation_id or self._proposal_correlation_id(proposal),
+            "vmga_profile": self.profile,
+        }
+        return self._write_to_ledger(event)
     
+    @staticmethod
+    def approval_time_window(now: Optional[datetime] = None, *, window_seconds: int = 300) -> str:
+        """Return the short-lived approval-token time window."""
+        now = now or datetime.now(timezone.utc)
+        epoch = int(now.timestamp())
+        window_start = epoch - (epoch % window_seconds)
+        return datetime.fromtimestamp(window_start, timezone.utc).strftime("%Y-%m-%d-%H-%M")
+
     def compute_approval_token(self, proposal_id: str, proposal_hash: str, approver_id: str, time_window: Optional[str] = None) -> str:
         """Compute HMAC token for approval (for out-of-band approval service).
         
         Includes time-window binding to prevent indefinite token replay.
-        The time_window defaults to current hour (YYYY-MM-DD-HH format).
+        The time_window defaults to a five-minute UTC window.
         
         This method is for the external approval service to compute tokens.
         The adapter does NOT self-generate tokens in approve_proposal().
@@ -862,36 +894,27 @@ class VMGAGmailAdapter:
         if self.approval_secret is None:
             raise RuntimeError("No approval_secret configured")
         
-        # Time window binding prevents replay across time periods
-        # Format: YYYY-MM-DD-HH (hourly windows)
         if time_window is None:
-            time_window = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H")
+            time_window = self.approval_time_window()
         
         message = f"{proposal_id}:{proposal_hash}:{approver_id}:{time_window}"
         return hmac.new(self.approval_secret, message.encode(), hashlib.sha256).hexdigest()
     
     def _verify_approval_token(self, proposal_id: str, proposal_hash: str, approver_id: str, token: str) -> bool:
-        """Verify HMAC token matches expected value, checking current and previous time windows.
+        """Verify HMAC token matches expected value for short-lived windows.
         
-        Allows for clock skew by checking current hour and previous hour.
+        Allows for clock skew by checking current and previous five-minute windows.
         """
         if self.approval_secret is None:
             return False  # Cannot verify without secret
         
         now = datetime.now(timezone.utc)
-        
-        # Check current hour window
-        current_window = now.strftime("%Y-%m-%d-%H")
-        expected_current = self.compute_approval_token(proposal_id, proposal_hash, approver_id, current_window)
-        if hmac.compare_digest(expected_current, token):
-            return True
-        
-        # Check previous hour window (for clock skew)
-        previous_hour = now - timedelta(hours=1)
-        previous_window = previous_hour.strftime("%Y-%m-%d-%H")
-        expected_previous = self.compute_approval_token(proposal_id, proposal_hash, approver_id, previous_window)
-        if hmac.compare_digest(expected_previous, token):
-            return True
+
+        for candidate in (now, now - timedelta(minutes=5)):
+            window = self.approval_time_window(candidate)
+            expected = self.compute_approval_token(proposal_id, proposal_hash, approver_id, window)
+            if hmac.compare_digest(expected, token):
+                return True
         
         return False
     
@@ -942,7 +965,7 @@ class VMGAGmailAdapter:
         elif decision.rule_id in ["vmga_kinetic_approval_required", "vmga_high_risk_review_required", "vmga_draft_justification_required"]:
             status = "REVIEW_REQUIRED"
             self.pending_proposals[proposal.proposal_id] = proposal
-            if not self._save_state_with_fail_closed(is_kinetic):
+            if not self._save_state_with_fail_closed(is_kinetic, proposal=proposal, operation="proposal_pending"):
                 # State save failed for kinetic action
                 return {
                     "status": "DENY", "proposal_id": proposal.proposal_id,
@@ -990,10 +1013,17 @@ class VMGAGmailAdapter:
             "risk_flags": [k for k, v in content_risk.__dict__.items() if v],
         }
     
-    def _save_state_with_fail_closed(self, is_kinetic: bool) -> bool:
+    def _save_state_with_fail_closed(
+        self,
+        is_kinetic: bool,
+        proposal: Optional[VMGAProposal] = None,
+        operation: str = "state_save",
+        correlation_id: Optional[str] = None,
+    ) -> bool:
         """Save state, return False on failure for kinetic actions."""
         try:
             self._save_state()
+            self._log_state_saved(proposal, operation, correlation_id=correlation_id)
             return True
         except Exception as e:
             if is_kinetic:
@@ -1038,7 +1068,7 @@ class VMGAGmailAdapter:
         del self.pending_proposals[proposal_id]
         
         # Save state with fail-closed
-        if not self._save_state_with_fail_closed(True):
+        if not self._save_state_with_fail_closed(True, proposal=proposal, operation="proposal_approved"):
             # Rollback
             self.pending_proposals[proposal_id] = proposal
             del self.approvals[proposal_id]
@@ -1177,7 +1207,13 @@ class VMGAGmailAdapter:
         # Mark used ONLY after successful execution with fail-closed persistence
         if success:
             approval.used = True
-            if not self._save_state_with_fail_closed(True):
+            approval_correlation_id = None
+            metadata = approval.parameters.get("metadata")
+            if isinstance(metadata, dict) and metadata.get("correlation_id"):
+                approval_correlation_id = str(metadata["correlation_id"])
+            elif approval.parameters.get("correlation_id"):
+                approval_correlation_id = str(approval.parameters["correlation_id"])
+            if not self._save_state_with_fail_closed(True, proposal=None, operation="approval_used", correlation_id=approval_correlation_id):
                 # State save failed - approval may be replayable after restart
                 # Log and return error, but don't mark as used in memory
                 approval.used = False
@@ -1221,6 +1257,7 @@ class VMGAGmailAdapter:
             "recipient_count": len(proposal.recipients) if proposal else 0,
             "attachment_count": len(proposal.attachment_ids) if proposal else 0,
             "justification": proposal.justification if proposal else None,
+            "correlation_id": self._proposal_correlation_id(proposal),
         }
         return self._write_to_ledger(event)
     
@@ -1236,6 +1273,7 @@ class VMGAGmailAdapter:
             "approval_token_hash": token_hash,
             "expires_at": expires_at.isoformat(),
             "vmga_profile": self.profile,
+            "correlation_id": self._proposal_correlation_id(proposal),
         }
         return self._write_to_ledger(event)
     
@@ -1250,6 +1288,13 @@ class VMGAGmailAdapter:
             "execution_error": error_info,
             "vmga_profile": self.profile,
         }
+        approval = self.approvals.get(proposal_id)
+        if approval:
+            metadata = approval.parameters.get("metadata")
+            if isinstance(metadata, dict) and metadata.get("correlation_id"):
+                event["correlation_id"] = str(metadata["correlation_id"])
+            elif approval.parameters.get("correlation_id"):
+                event["correlation_id"] = str(approval.parameters["correlation_id"])
         return self._write_to_ledger(event)
     
     def _log_lockdown_event(self, actor_id: str, proposal: VMGAProposal) -> bool:

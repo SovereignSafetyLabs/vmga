@@ -18,6 +18,7 @@ from .vmga_adapter import (
 from .backends import FakeGmailBackend, GogCLIBackend
 from .broker import VMGABroker
 from .executor import VMGAExecutor
+from .redaction import redact_json, redact_text
 from .sqlite_state import SQLiteStateStore
 
 __all__ = [
@@ -34,6 +35,8 @@ __all__ = [
     "SQLiteStateStore",
     "VMGABroker",
     "VMGAExecutor",
+    "redact_json",
+    "redact_text",
     "load_vmga_policy",
 ]
 

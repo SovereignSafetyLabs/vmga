@@ -17,6 +17,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
       - name: Install
         run: |
           python -m pip install --upgrade pip
@@ -25,5 +28,11 @@ jobs:
         run: python -m compileall src tests scripts integrations
       - name: Test
         run: pytest -q
+      - name: Validate OpenClaw plugin
+        working-directory: integrations/openclaw
+        run: |
+          npm ci
+          npm test
+          npm run plugin:validate
       - name: Release check
         run: python scripts/vmga_release_check.py

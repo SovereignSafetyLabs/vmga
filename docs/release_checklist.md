@@ -49,5 +49,17 @@ Before making VMGA public:
   profiles, VMGA state, and VMGA evidence are treated as sensitive deployment
   artifacts.
 - Verify example policies use placeholder domains and strict defaults.
+- Verify SQLite state is using WAL mode and a busy timeout in broker deployments.
+- Verify evidence rotation is configured through VMGA or the host log-rotation
+  system before live use.
+- Verify broker correlation IDs appear on proposal, state, approval, and
+  execution evidence for at least one request lifecycle.
+- Verify redaction happens in memory before writing shareable smoke-test or
+  release evidence.
+- Verify live smoke drafts are tagged with `[VMGA-SMOKE]` or cleaned up before
+  sharing evidence.
+- Verify CI-safe mocks use the same broker request contract as the real broker.
+- Verify gogcli rate-limit handling returns structured VMGA errors after
+  bounded exponential backoff.
 - Verify `SECURITY.md` has a monitored reporting path.
 - Record DSOVS self-assessment evidence in `docs/dsovs_readiness.md`.
