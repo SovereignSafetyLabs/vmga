@@ -94,12 +94,18 @@ events for request tracing.
 Operator helpers:
 
 ```bash
+vmga-operator --json posture
 vmga-operator --state-db /path/outside/agent/state.sqlite3 list
 vmga-operator --state-db /path/outside/agent/state.sqlite3 show <proposal-id>
 vmga-approval-token <proposal-id> <proposal-hash> <approver-id>
 vmga-operator approve <proposal-id> <approver-id> <approval-token>
 vmga-operator execute <proposal-id> <proposal-hash> <approval-token>
 ```
+
+The broker exposes `/v1/posture` and prints a startup posture summary. Treat any
+`advisory` or `cannot_determine` posture as not hard-enforcement-ready; unknown
+direct-bypass or credential-isolation checks must be resolved with operator
+evidence before making hard-boundary claims.
 
 For a real-account smoke test, run the broker first and then opt in explicitly:
 

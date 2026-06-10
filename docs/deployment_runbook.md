@@ -59,9 +59,19 @@ Health and recovery checks:
 
 ```bash
 curl -fsS http://127.0.0.1:8765/health
+curl -fsS http://127.0.0.1:8765/v1/posture
+vmga-operator --json posture
 vmga-operator --state-db /path/outside/agent/state.sqlite3 list
 vmga-verify-evidence /path/outside/agent/evidence.jsonl --json
 ```
+
+`/v1/posture` is a runtime self-check, not a formal sandbox proof. It reports
+whether VMGA can locally see hard-enforcement preconditions such as broker auth,
+backend wrapper choice, obvious path placement, evidence rotation, approval
+mode, and evidence-integrity mode. `unknown` never counts as hard-ready. If the
+posture mode is `advisory` or `cannot_determine`, describe the deployment that
+way until missing credential-isolation, direct-bypass, and evidence-anchor proof
+is collected.
 
 If `/health` reports lockdown, inspect evidence first, then reset only through
 an operator-controlled maintenance path. `reset_lockdown` is an in-process

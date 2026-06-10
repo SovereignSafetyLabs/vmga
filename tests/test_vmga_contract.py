@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+from urllib import request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,9 +19,11 @@ from vmga import (
     VMGAGmailAdapter,
     VMGAProposal,
 )
+from vmga.broker import make_server
 from vmga.approvals import approval_contract, validate_approval_dict
 from vmga.evidence import evidence_event, verify_events
 from vmga.ledger import JSONLVMGALedger, LedgerVestaAdapter
+from vmga.posture import PostureConfig
 from vmga.proposals import proposal_contract, validate_proposal_dict
 from vmga.cli import approval_token_main
 
@@ -141,6 +144,56 @@ def test_broker_propose_and_execute_fail_closed_without_executor():
         assert unknown["error_code"] == "vmga_broker_bad_request"
         denied = broker.execute({"proposal_id": "p", "proposal_hash": "h", "approval_token": "t"})
         assert denied["error_code"] == "vmga_executor_unavailable"
+
+
+def test_broker_reports_runtime_posture():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        broker = VMGABroker(
+            adapter,
+            posture_config=PostureConfig(
+                backend="fake",
+                policy_path=str(Path(tmpdir) / "policy.yaml"),
+                state_db_path=str(Path(tmpdir) / "state.sqlite3"),
+                ledger_path=str(Path(tmpdir) / "evidence.jsonl"),
+                agent_roots=[str(Path.cwd())],
+                allow_unauthenticated=True,
+            ),
+        )
+
+        posture = broker.posture()
+        assert posture["hard_enforcement_ready"] is False
+        assert posture["mode"] in {"advisory", "cannot_determine"}
+        assert any(check["id"] == "approval_boundary" and check["status"] == "warn" for check in posture["checks"])
+        assert broker.health()["posture_mode"] == posture["mode"]
+
+
+def test_http_broker_exposes_posture_endpoint():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        broker = VMGABroker(
+            adapter,
+            posture_config=PostureConfig(
+                backend="fake",
+                state_db_path=str(Path(tmpdir) / "state.sqlite3"),
+                ledger_path=str(Path(tmpdir) / "evidence.jsonl"),
+                agent_roots=[str(Path.cwd())],
+            ),
+        )
+        server = make_server("127.0.0.1", 0, broker)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = server.server_address
+            with request.urlopen(f"http://{host}:{port}/v1/posture", timeout=5) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    assert payload["hard_enforcement_ready"] is False
+    assert any(check["id"] == "direct_gmail_bypass" and check["status"] == "unknown" for check in payload["checks"])
 
 
 def test_broker_executes_allowed_search_through_backend():

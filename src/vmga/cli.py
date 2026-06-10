@@ -16,6 +16,7 @@ from .broker import VMGABroker, make_server
 from .evidence import load_jsonl_events, verify_events
 from .executor import VMGAExecutor
 from .ledger import JSONLVMGALedger, LedgerVestaAdapter
+from .posture import PostureConfig, assess_posture, print_posture_summary
 from .redaction import redact_json
 from .sqlite_state import SQLiteStateStore
 from .vmga_adapter import ApprovalRecord, VMGAGmailAdapter, VMGAProposal, load_vmga_policy
@@ -153,6 +154,17 @@ def _post_broker_json(broker_url: str, endpoint: str, payload: dict[str, object]
         return json.loads(response.read().decode("utf-8"))
 
 
+def _get_broker_json(broker_url: str, endpoint: str, bearer_token: str | None) -> dict[str, object]:
+    from urllib import request
+
+    headers = {"Accept": "application/json"}
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+    req = request.Request(broker_url.rstrip("/") + endpoint, method="GET", headers=headers)
+    with request.urlopen(req, timeout=10.0) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def operator_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="VMGA operator helper")
     parser.add_argument("--state-db", default=".vmga/state.sqlite3", help="SQLite state database path")
@@ -162,6 +174,16 @@ def operator_main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("list", help="List pending proposals and approvals")
+
+    posture = sub.add_parser("posture", help="Show runtime enforcement posture")
+    posture.add_argument("--local", action="store_true", help="Assess local paths instead of querying the broker")
+    posture.add_argument("--policy", default="policies/draft_assist.yaml")
+    posture.add_argument("--ledger", default=".vmga/evidence.jsonl")
+    posture.add_argument("--backend", choices=["fake", "gogcli"], default="fake")
+    posture.add_argument("--gog-binary", default="")
+    posture.add_argument("--gog-home", default=None)
+    posture.add_argument("--ledger-rotate-bytes", type=int, default=0)
+    posture.add_argument("--agent-root", action="append", default=None, help="Agent-readable workspace root; defaults to cwd")
 
     show = sub.add_parser("show", help="Show one proposal or approval")
     show.add_argument("proposal_id")
@@ -179,6 +201,24 @@ def operator_main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     bearer_token = os.getenv(args.bearer_token_env)
+
+    if args.command == "posture":
+        if args.local:
+            payload = assess_posture(PostureConfig(
+                backend=args.backend,
+                policy_path=args.policy,
+                state_db_path=args.state_db,
+                ledger_path=args.ledger,
+                ledger_rotate_bytes=args.ledger_rotate_bytes,
+                bearer_token_set=bool(bearer_token),
+                gog_binary=args.gog_binary,
+                gog_home=args.gog_home,
+                agent_roots=args.agent_root or [str(Path.cwd())],
+            ))
+        else:
+            payload = _get_broker_json(args.broker_url, "/v1/posture", bearer_token)
+        _print_payload(payload, as_json=args.json)
+        return 0
 
     if args.command in {"approve", "execute"}:
         endpoint = "/v1/approvals" if args.command == "approve" else "/v1/executions"
@@ -250,6 +290,7 @@ def broker_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gog-client", default=None, help="gog OAuth client name")
     parser.add_argument("--gog-home", default=None, help="gog config root outside the agent workspace")
     parser.add_argument("--gog-timeout", type=float, default=30.0, help="gog command timeout in seconds")
+    parser.add_argument("--agent-root", action="append", default=None, help="Agent-readable workspace root for posture checks; defaults to cwd")
     args = parser.parse_args(argv)
 
     approval_secret = os.getenv(args.approval_secret_env)
@@ -270,7 +311,6 @@ def broker_main(argv: list[str] | None = None) -> int:
     )
     backend = _build_backend(args)
     executor = VMGAExecutor(adapter, backend)
-    broker = VMGABroker(adapter, executor, backend=backend)
     bearer_token = os.getenv(args.bearer_token_env)
     loopback_hosts = {"127.0.0.1", "::1", "localhost"}
     if args.host not in loopback_hosts and not bearer_token:
@@ -288,12 +328,27 @@ def broker_main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    posture_config = PostureConfig(
+        host=args.host,
+        backend=args.backend,
+        policy_path=args.policy,
+        state_db_path=args.state_db,
+        ledger_path=args.ledger,
+        ledger_rotate_bytes=args.ledger_rotate_bytes,
+        bearer_token_set=bool(bearer_token),
+        allow_unauthenticated=args.allow_unauthenticated,
+        gog_binary=getattr(backend, "binary", args.gog_binary),
+        gog_home=args.gog_home,
+        agent_roots=args.agent_root or [str(Path.cwd())],
+    )
+    broker = VMGABroker(adapter, executor, backend=backend, posture_config=posture_config)
     server = make_server(args.host, args.port, broker, bearer_token=bearer_token)
 
     print(
         f"VMGA broker listening on http://{args.host}:{args.port} with {args.backend} backend",
         file=sys.stderr,
     )
+    print(print_posture_summary(broker.posture()), file=sys.stderr)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

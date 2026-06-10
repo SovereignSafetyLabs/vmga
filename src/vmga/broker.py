@@ -11,21 +11,35 @@ from collections.abc import Mapping
 
 from .broker_contract import validate_broker_proposal_payload
 from .executor import VMGAExecutor
+from .posture import PostureConfig, assess_posture
 from .vmga_adapter import VMGAGmailAdapter
 
 
 class VMGABroker:
-    def __init__(self, adapter: VMGAGmailAdapter, executor: Optional[VMGAExecutor] = None, backend: Optional[Any] = None):
+    def __init__(
+        self,
+        adapter: VMGAGmailAdapter,
+        executor: Optional[VMGAExecutor] = None,
+        backend: Optional[Any] = None,
+        posture_config: Optional[PostureConfig] = None,
+    ):
         self.adapter = adapter
         self.executor = executor
         self.backend = backend if backend is not None else getattr(executor, "backend", None)
+        self.posture_config = posture_config
 
     def health(self) -> Dict[str, Any]:
         return {
             "status": "ok" if not self.adapter.lockdown_active else "lockdown",
             "lockdown_active": self.adapter.lockdown_active,
             "profile": self.adapter.profile,
+            "posture_mode": self.posture()["mode"],
         }
+
+    def posture(self) -> Dict[str, Any]:
+        if self.posture_config is None:
+            return assess_posture(PostureConfig())
+        return assess_posture(self.posture_config)
 
     def propose(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         correlation_id = str(payload.get("correlation_id") or uuid.uuid4()) if isinstance(payload, Mapping) else str(uuid.uuid4())
@@ -130,6 +144,9 @@ class VMGAHTTPHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/health":
             self._send(200, self.broker.health())
+            return
+        if self.path == "/v1/posture":
+            self._send(200, self.broker.posture())
             return
         self._send(404, {"status": "ERROR", "error_code": "vmga_broker_not_found"})
 

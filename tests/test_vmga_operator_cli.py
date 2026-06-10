@@ -119,6 +119,58 @@ def test_operator_approve_posts_to_broker_with_bearer_token(monkeypatch, capsys)
     assert json.loads(capsys.readouterr().out)["status"] == "APPROVED"
 
 
+def test_operator_posture_queries_broker_with_bearer_token(monkeypatch, capsys):
+    captured = {}
+
+    class FakeResponse:
+        def read(self):
+            return b'{"mode":"advisory","checks":[]}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["auth"] = req.headers.get("Authorization")
+        return FakeResponse()
+
+    monkeypatch.setenv("VMGA_BROKER_TOKEN", "broker-token")
+    with patch("urllib.request.urlopen", fake_urlopen):
+        result = operator_main([
+            "--broker-url",
+            "https://vmga.example.invalid",
+            "--json",
+            "posture",
+        ])
+
+    assert result == 0
+    assert captured["url"] == "https://vmga.example.invalid/v1/posture"
+    assert captured["auth"] == "Bearer broker-token"
+    assert json.loads(capsys.readouterr().out)["mode"] == "advisory"
+
+
+def test_operator_posture_local_marks_repo_paths_advisory(capsys):
+    result = operator_main([
+        "--json",
+        "--state-db",
+        ".vmga/state.sqlite3",
+        "posture",
+        "--local",
+        "--ledger",
+        ".vmga/evidence.jsonl",
+        "--agent-root",
+        str(Path.cwd()),
+    ])
+
+    assert result == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["hard_enforcement_ready"] is False
+    assert any(check["id"] == "state_path" and check["status"] == "warn" for check in payload["checks"])
+
+
 def test_broker_main_refuses_non_loopback_without_bearer_token(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("VMGA_APPROVAL_SECRET", "secret")
     monkeypatch.delenv("VMGA_BROKER_TOKEN", raising=False)
@@ -185,3 +237,29 @@ def test_broker_main_allows_explicit_loopback_unauthenticated_dev(monkeypatch, t
     assert result == 0
     assert make_server.call_args.args[0] == "127.0.0.1"
     assert make_server.call_args.kwargs["bearer_token"] is None
+
+
+def test_broker_main_prints_posture_summary(monkeypatch, tmp_path, capsys):
+    class FakeServer:
+        def serve_forever(self):
+            return None
+
+        def server_close(self):
+            return None
+
+    monkeypatch.setenv("VMGA_APPROVAL_SECRET", "secret")
+    monkeypatch.setenv("VMGA_BROKER_TOKEN", "broker-token")
+    with patch("vmga.cli.make_server", return_value=FakeServer()):
+        result = broker_main(
+            [
+                "--policy",
+                "policies/draft_assist.yaml",
+                "--state-db",
+                str(tmp_path / "state.sqlite3"),
+                "--ledger",
+                str(tmp_path / "evidence.jsonl"),
+            ]
+        )
+
+    assert result == 0
+    assert "VMGA posture:" in capsys.readouterr().err
