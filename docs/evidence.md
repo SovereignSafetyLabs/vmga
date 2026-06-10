@@ -56,3 +56,8 @@ Use `scripts/build_vmga_evidence.py --mode release` to collect a redacted local
 evidence skeleton. The command records hashes and broker health by default. Add
 `--include-local-tools` only when the local Hermes/OpenClaw/gog command output is
 intended to become part of the operator evidence bundle.
+
+For the draft `v0.3.0` integrity plan, see
+`docs/evidence_integrity_design.md`. Until that design is implemented and
+anchor material is configured outside the agent authority domain, VMGA evidence
+remains append-only JSONL with advisory verification.
