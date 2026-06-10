@@ -18,5 +18,6 @@ dist/
 google_token.json
 google_client_secret.json
 .vmga_state/
+.vmga/
 vmga_state/
 artifacts/**/*.sqlite3
