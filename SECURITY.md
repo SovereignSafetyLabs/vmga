@@ -5,9 +5,14 @@ stable production security boundary.
 
 ## Reporting
 
-For now, report suspected vulnerabilities privately to the repository owner. Do
-not include live Gmail tokens, approval secrets, or private mailbox contents in
-reports.
+Use GitHub Private Vulnerability Reporting for this repository:
+
+https://github.com/SSBrouhard/vmga/security/advisories/new
+
+Do not include live Gmail tokens, approval secrets, OAuth client JSON, or
+private mailbox contents in reports. If evidence requires sensitive material,
+describe the shape of the issue first and coordinate a minimal redacted
+reproducer through the private advisory.
 
 ## Scope
 

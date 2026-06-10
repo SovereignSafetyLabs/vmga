@@ -51,6 +51,20 @@ For company-shared workflows, use a dedicated runtime identity: a dedicated
 machine, VM, container, or OS user; dedicated browser/profile/accounts; and no
 personal Google account or password-manager state in that runtime.
 
+## Upstream Dependency Advisory
+
+VMGA treats OpenClaw as an optional external runtime, not as part of the VMGA
+broker. The npm package for OpenClaw `2026.6.5` currently ships a shrinkwrapped
+dependency tree that pins `hono@4.12.18`, while GitHub Dependabot recommends
+`hono >= 4.12.21` for multiple medium-severity advisories. Because the vulnerable
+copy is pinned inside OpenClaw's published shrinkwrap, VMGA's package-level
+`overrides` cannot reliably replace it.
+
+Until OpenClaw publishes a patched runtime, keep OpenClaw VMGA deployments local
+or private-network only and treat any remote exposure as blocked unless the
+operator can prove an equivalent patched OpenClaw runtime, authenticated ingress,
+operator allowlists, sandboxing, and denied direct-bypass paths.
+
 ## Local Gateway Readiness
 
 `plugin.vmga` being loaded proves only that OpenClaw can see the plugin. It does

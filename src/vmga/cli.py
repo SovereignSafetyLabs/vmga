@@ -244,6 +244,7 @@ def broker_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--backend", choices=["fake", "gogcli"], default="fake", help="Mailbox backend")
     parser.add_argument("--approval-secret-env", default="VMGA_APPROVAL_SECRET", help="Env var containing approval HMAC secret")
     parser.add_argument("--bearer-token-env", default="VMGA_BROKER_TOKEN", help="Optional env var containing broker bearer token")
+    parser.add_argument("--allow-unauthenticated", action="store_true", help="Allow unauthenticated broker access for loopback-only development")
     parser.add_argument("--gog-binary", default="", help="Path to gog-agent-safe or gog")
     parser.add_argument("--gog-account", default=None, help="gog account email")
     parser.add_argument("--gog-client", default=None, help="gog OAuth client name")
@@ -271,6 +272,22 @@ def broker_main(argv: list[str] | None = None) -> int:
     executor = VMGAExecutor(adapter, backend)
     broker = VMGABroker(adapter, executor, backend=backend)
     bearer_token = os.getenv(args.bearer_token_env)
+    loopback_hosts = {"127.0.0.1", "::1", "localhost"}
+    if args.host not in loopback_hosts and not bearer_token:
+        print(
+            f"Refusing non-loopback bind without {args.bearer_token_env}; set a bearer token or bind to 127.0.0.1",
+            file=sys.stderr,
+        )
+        return 2
+    if args.host not in loopback_hosts and args.allow_unauthenticated:
+        print("--allow-unauthenticated is only allowed for loopback hosts", file=sys.stderr)
+        return 2
+    if not bearer_token and not args.allow_unauthenticated:
+        print(
+            f"Refusing unauthenticated broker start; set {args.bearer_token_env} or pass --allow-unauthenticated for loopback development",
+            file=sys.stderr,
+        )
+        return 2
     server = make_server(args.host, args.port, broker, bearer_token=bearer_token)
 
     print(

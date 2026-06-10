@@ -1,46 +1,66 @@
 # DSOVS Readiness Mapping
 
 VMGA uses the OWASP DevSecOps Verification Standard (DSOVS) as a
-self-assessment lens for release readiness. This mapping is not OWASP
-certification, endorsement, or compliance evidence by itself.
+self-assessment lens for release and deployment readiness. DSOVS is useful for
+gap analysis, maturity-roadmap planning, and evidence collection; this file is
+not OWASP certification, endorsement, formal compliance evidence, or a complete
+DSOVS assessment.
 
-## Selected Controls
+The control identifiers below follow the current DSOVS phase naming used by the
+OWASP project, for example `DES-002` and `CODE-004`. Re-check the upstream
+standard before using this mapping in an audit packet because DSOVS evolves as
+processes and technologies change.
 
-- `DSOVS-DES-002` Threat Modelling: VMGA must document trust domains,
-  deployment preconditions, and bypass paths.
-- `DSOVS-CODE-002` Hardcoded Secrets Detection: CI should scan for committed
-  OAuth credentials, tokens, approval secrets, and private keys.
-- `DSOVS-CODE-004` SAST: CI should run static analysis or a documented
-  substitute before public release.
-- `DSOVS-CODE-005` SCA: Dependencies should be scanned for known
-  vulnerabilities.
-- `DSOVS-CODE-006` Software License Compliance: Dependencies and borrowed
-  prior art must have compatible licenses and attribution.
-- `DSOVS-CODE-009` Secure Dependency Management: Dependency updates should be
-  tracked and reviewed.
-- `DSOVS-REL-003` Secret Management: Production docs must require Gmail tokens
-  and approval secrets to live outside the agent authority domain.
-- `DSOVS-REL-004` Secure Configuration: Example policies should be strict by
-  default and reject unknown or ambiguous behavior.
-- `DSOVS-REL-005` Security Policy Enforcement: VMGA must fail closed when policy,
-  approval, state, or evidence requirements are missing.
-- `DSOVS-REL-008` Secure Release Management: Releases should have a checklist,
-  changelog, tests, and explicit claim boundaries.
-- `DSOVS-OPR-004` Application Security Logging: VMGA evidence must be structured
-  and must not log raw approval tokens or secrets.
-- `DSOVS-OPR-005` Vulnerability Disclosure: Public release should include a
-  monitored reporting path.
-- `DSOVS-TEST-005` Security Test Coverage: Tests should map to proposal,
-  approval, execution, policy, evidence, and lockdown requirements.
+## Selected Control Areas
 
-## Release Evidence
+- `DES-002` Threat Modelling: VMGA documents trust domains, deployment
+  preconditions, and bypass paths in the README, deployment runbook, and
+  Hermes/OpenClaw integration notes.
+- `CODE-002` Hardcoded Secrets Detection: Release review checks committed docs,
+  examples, and integration files for obvious OAuth credentials, tokens,
+  approval secrets, private keys, and public Gmail account leakage.
+- `CODE-004` Static Application Security Testing: CodeQL is expected to run
+  through GitHub default setup for the canonical repository; releases should
+  record the relevant run status rather than relying on local assumptions.
+- `CODE-005` Software Composition Analysis: Dependabot alerts and dependency
+  update PRs are part of release review. Optional OpenClaw runtime findings are
+  tracked as upstream integration advisories when VMGA cannot patch them safely.
+- `CODE-006` Software License Compliance: Dependencies and borrowed prior art
+  should have compatible licenses and attribution before a tagged release.
+- `CODE-009` Secure Dependency Management: Dependency updates should be tracked
+  through reviewable PRs and CI, not applied through unreviewed local lockfile
+  churn.
+- `REL-003` Secret Management: Gmail tokens, Google OAuth client material,
+  approval verifier secrets, and broker bearer tokens must live outside the
+  agent authority domain for hard-enforcement claims.
+- `REL-004` Secure Configuration: Example policies should use strict defaults,
+  placeholder values, and explicit denial for unknown or ambiguous behavior.
+- `REL-005` Security Policy Enforcement: VMGA should fail closed when policy,
+  approval, state, backend, or evidence requirements are missing.
+- `REL-008` Secure Release Management: Tagged releases should have a release
+  checklist, changelog, tests, security-scan status, and explicit claim
+  boundaries.
+- `OPR-004` Application Security Logging: VMGA evidence must be structured,
+  traceable by correlation ID, and free of raw approval tokens, OAuth material,
+  and mailbox payloads.
+- `OPR-005` Vulnerability Disclosure: The public repository should keep a
+  monitored reporting path and private vulnerability reporting enabled.
+- `TEST-005` Security Test Coverage: Tests should cover proposal validation,
+  approval binding, execution gating, policy decisions, evidence events,
+  lockdown behavior, and CI-safe integration contracts.
 
-Before public release, collect:
+## Evidence To Collect
 
-- Test output for VMGA unit and contract tests.
-- CI output for secrets scanning, static analysis, dependency review, and license
-  review where configured.
-- Documentation review showing production claims are bounded by deployment
+For each tagged release or deployment that claims hard VMGA enforcement, collect
+or link:
+
+- VMGA unit, contract, and integration test output.
+- Release-check output from `scripts/vmga_release_check.py`.
+- CodeQL, secret-scanning, Dependabot, dependency-review, and license-review
+  status where configured.
+- Documentation review showing security claims are bounded by deployment
   preconditions.
-- Sample VMGA evidence ledger entries for allow, review-required, deny,
+- Sample redacted VMGA evidence ledger entries for allow, review-required, deny,
   approval, execution, lockdown, and reset paths.
+- Deployment-specific bypass evidence for Hermes, OpenClaw, gogcli, and any
+  other mailbox-capable runtime surface being claimed.

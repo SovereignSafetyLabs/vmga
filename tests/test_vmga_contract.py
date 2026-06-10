@@ -1,7 +1,9 @@
 import json
 import sqlite3
 import tempfile
-from datetime import datetime, timezone
+import threading
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -172,6 +174,31 @@ def test_broker_executes_allowed_search_through_backend():
         assert backend.max_results == 2
 
 
+def test_broker_executes_allowed_search_through_shipped_fake_backend():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        backend = FakeGmailBackend(
+            messages={
+                "m1": {"subject": "invoice one", "body": "match"},
+                "m2": {"subject": "invoice two", "body": "match"},
+            }
+        )
+        broker = VMGABroker(adapter, backend=backend)
+
+        result = broker.propose(
+            {
+                "action": "read",
+                "actor_id": "agent_1",
+                "search_query": "invoice",
+                "max_results": 1,
+            }
+        )
+
+        assert result["status"] == "ALLOW"
+        assert result["backend_result"]["backend"] == "fake"
+        assert len(result["backend_result"]["messages"]) == 1
+
+
 def test_broker_injects_correlation_id_into_results_and_evidence():
     with tempfile.TemporaryDirectory() as tmpdir:
         vesta = MockVesta()
@@ -270,6 +297,120 @@ def test_jsonl_ledger_rotates_before_disk_growth(tmp_path):
 
     assert ledger_path.exists()
     assert (tmp_path / "evidence.jsonl.1").exists()
+
+
+def test_approval_single_use_is_locked_for_concurrent_execution():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        result = adapter.propose_action("create_draft", "agent_1", content="Draft", justification="Test")
+        token = adapter.compute_approval_token(result["proposal_id"], result["proposal_hash"], "operator_1")
+        adapter.approve_proposal(result["proposal_id"], "operator_1", token)
+
+        outputs = []
+        output_lock = threading.Lock()
+        execution_count = 0
+
+        def handler(_request):
+            nonlocal execution_count
+            execution_count += 1
+            time.sleep(0.05)
+            return {"ok": True}
+
+        def execute_once():
+            outcome = adapter.execute_approved(result["proposal_id"], result["proposal_hash"], token, handler)
+            with output_lock:
+                outputs.append(outcome)
+
+        threads = [threading.Thread(target=execute_once), threading.Thread(target=execute_once)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=3)
+
+        statuses = sorted(output["status"] for output in outputs)
+        assert statuses == ["DENY", "SUCCESS"]
+        assert execution_count == 1
+        assert sum(1 for output in outputs if output.get("error_code") == "vmga_approval_already_used") == 1
+
+
+def test_approval_mutation_is_locked_for_concurrent_approval():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        result = adapter.propose_action("create_draft", "agent_1", content="Draft", justification="Test")
+        token = adapter.compute_approval_token(result["proposal_id"], result["proposal_hash"], "operator_1")
+        outputs = []
+        output_lock = threading.Lock()
+
+        def approve_once():
+            outcome = adapter.approve_proposal(result["proposal_id"], "operator_1", token)
+            with output_lock:
+                outputs.append(outcome)
+
+        threads = [threading.Thread(target=approve_once), threading.Thread(target=approve_once)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=3)
+
+        statuses = sorted(output["status"] for output in outputs)
+        assert statuses == ["APPROVED", "ERROR"]
+        assert sum(1 for output in outputs if output.get("error_code") == "vmga_proposal_not_found") == 1
+
+
+def test_proposal_evidence_redacts_and_caps_agent_text():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        vesta = MockVesta()
+        adapter = VMGAGmailAdapter(
+            vesta_adapter=vesta,
+            profile="draft_assist",
+            policy_rules={"allowed_actions": ["read"], "kinetic_requires_approval": True},
+            state_store=SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")),
+            approval_secret="test_secret",
+        )
+        secret = "ya29." + "a" * 24
+        adapter.propose_action(
+            "create_draft",
+            "agent_1",
+            content="Draft",
+            justification=f"{secret} " + "x" * 2000,
+        )
+
+        event = next(event for event in vesta.audit_ledger.events if event["event_type"] == "vmga_proposal_received")
+        assert secret not in event["justification"]
+        assert "[REDACTED]" in event["justification"]
+        assert len(event["justification"]) == 1000
+
+
+def test_reset_lockdown_persists_state():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "vmga.sqlite3")
+        adapter = make_adapter(SQLiteStateStore(db_path))
+        adapter.lockdown_active = True
+        adapter.denial_counts = {"agent_1": 9}
+
+        result = adapter.reset_lockdown("admin_1")
+
+        assert result["status"] == "RESET"
+        restarted = make_adapter(SQLiteStateStore(db_path))
+        assert restarted.lockdown_active is False
+        assert restarted.denial_counts == {}
+
+
+def test_sqlite_rate_limit_state_expires_stale_attempts():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store = SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3"))
+        stale = datetime.now(timezone.utc) - timedelta(seconds=7200)
+        fresh = datetime.now(timezone.utc)
+        store.save_rate_limit_state(
+            {
+                "stale": {"count": 5, "first_attempt": stale.isoformat()},
+                "fresh": {"count": 1, "first_attempt": fresh.isoformat()},
+            }
+        )
+
+        loaded = store.load_rate_limit_state(lockout_duration_seconds=3600)
+
+        assert sorted(loaded) == ["fresh"]
 
 
 def test_approval_token_cli_matches_adapter(monkeypatch, capsys):

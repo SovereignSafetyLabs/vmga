@@ -21,7 +21,7 @@ evidence:
   release_bundle: ./artifacts/release-bundle
 
 notes: |
-  This example is safe to publish and uses placeholder values only.
+  This example is safe for public documentation and uses placeholder values only.
   VMGA does not claim prompt-injection prevention, DLP, host compromise
   protection, browser/session isolation, compliance certification, or security
   of Hermes/OpenClaw internals.

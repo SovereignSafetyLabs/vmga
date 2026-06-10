@@ -50,7 +50,7 @@ Real-account setup checklist:
 4. Run `gog-agent-safe` health checks from the operator shell, not from Hermes or
    OpenClaw.
 5. Start `vmga-broker --backend gogcli` with `--gog-binary` pointing at
-   `gog-agent-safe`.
+   `gog-agent-safe` and `VMGA_BROKER_TOKEN` set in the operator environment.
 6. Verify through `scripts/vmga_live_smoke.py --live`; do not validate by giving
    agents direct gog access.
 

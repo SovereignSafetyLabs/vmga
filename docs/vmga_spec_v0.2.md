@@ -4,18 +4,27 @@ Classification: UNCLASSIFIED // TLP:WHITE
 Status: Reference Specification (TRL 4–5)  
 Revised: 2026-04-14
 
+> Historical reference specification. For the standalone `vmga` package's
+> current implementation and deployment claim boundaries, see `README.md` and
+> `docs/deployment_runbook.md`. The standalone ledger is append-only JSONL, not
+> hash-chained, and credential isolation is a deployment precondition rather
+> than something the package can enforce by itself.
+
 ---
 
 ## 1. Purpose
 
 VMGA is a **domain-specific governance extension** of the Vesta Agent Runtime Governance framework. It mediates all agent interaction with Gmail, adding email-specific policy enforcement while leveraging the core Vesta control plane for execution gating, audit logging, and circuit breaking.
 
-VMGA ensures:
-- Untrusted email content never becomes authority
-- Agents propose actions but cannot directly execute mailbox-modifying operations
-- Kinetic actions (send, draft, forward, etc.) pass through approval workflow
-- Gmail credentials remain isolated from agent runtime
-- All proposals, decisions, approvals, and executions are recorded as evidence
+Under the deployment preconditions in `docs/deployment_runbook.md`, VMGA is
+designed so that:
+
+- Untrusted email content does not become mailbox authority.
+- Agents propose actions but cannot directly execute mailbox-modifying
+  operations.
+- Kinetic actions (send, draft, forward, etc.) pass through approval workflow.
+- Gmail credentials are isolated from the agent runtime by deployment controls.
+- Proposals, decisions, approvals, and executions are recorded as evidence.
 
 ---
 
@@ -34,7 +43,7 @@ VMGA extends the Vesta governance stack:
           ↓
      [Gmail API]
           ↓
- [Vesta Audit Ledger]  ←── Hash-chained evidence
+ [Vesta Audit Ledger]  ←── Append-only evidence
 ```
 
 ### 2.1 Integration Points

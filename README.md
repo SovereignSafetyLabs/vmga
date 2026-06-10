@@ -10,9 +10,9 @@ mailbox side effect occurs.
 
 ## Current Status
 
-This repository is being extracted from the Vesta Agent Runtime Governance
-reference implementation. The current code is a reference implementation, not a
-complete production service.
+This repository contains the standalone VMGA reference implementation extracted
+from the Vesta Agent Runtime Governance work. The current code is
+production-alpha control-plane software, not a complete hosted service.
 
 Production enforcement requires deployment controls outside this package:
 
@@ -24,6 +24,18 @@ Production enforcement requires deployment controls outside this package:
 
 Without those controls, VMGA should be described as advisory governance or a
 reference control pattern, not hard isolation.
+
+### Known Integration Advisory
+
+VMGA's core broker path does not depend on OpenClaw. The optional OpenClaw
+integration currently tracks OpenClaw `2026.6.5` as an external runtime and test
+fixture. GitHub Dependabot may report medium-severity `hono < 4.12.21` alerts
+inside OpenClaw's shrinkwrapped npm dependency tree. Those alerts are upstream
+to the OpenClaw package, and VMGA cannot safely override them from this
+repository. Do not expose an OpenClaw-backed VMGA deployment to remote ingress
+until OpenClaw is patched or the deployment supplies an equivalent patched
+runtime with loopback/private-network binding, token or trusted-proxy auth,
+operator allowlists, sandboxing, and direct-bypass evidence.
 
 ## What VMGA Governs
 
@@ -54,7 +66,7 @@ Run the local broker with the fake backend for offline development:
 
 ```bash
 export VMGA_APPROVAL_SECRET="replace-with-a-local-dev-secret"
-vmga-broker --backend fake --policy policies/draft_assist.yaml
+vmga-broker --backend fake --policy policies/draft_assist.yaml --allow-unauthenticated
 ```
 
 For a gogcli-backed broker, point VMGA at the agent-safe wrapper and keep gog
@@ -62,6 +74,7 @@ OAuth config outside the agent-readable workspace:
 
 ```bash
 export VMGA_APPROVAL_SECRET="replace-with-a-broker-secret"
+export VMGA_BROKER_TOKEN="replace-with-a-broker-token"
 vmga-broker \
   --backend gogcli \
   --gog-binary /opt/homebrew/bin/gog-agent-safe \

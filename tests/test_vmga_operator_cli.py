@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from vmga import SQLiteStateStore, VMGAGmailAdapter
-from vmga.cli import operator_main
+from vmga.cli import broker_main, operator_main
 
 
 class MockLedger:
@@ -117,3 +117,71 @@ def test_operator_approve_posts_to_broker_with_bearer_token(monkeypatch, capsys)
     assert captured["auth"] == "Bearer broker-token"
     assert captured["payload"]["proposal_id"] == "p1"
     assert json.loads(capsys.readouterr().out)["status"] == "APPROVED"
+
+
+def test_broker_main_refuses_non_loopback_without_bearer_token(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("VMGA_APPROVAL_SECRET", "secret")
+    monkeypatch.delenv("VMGA_BROKER_TOKEN", raising=False)
+
+    result = broker_main(
+        [
+            "--host",
+            "0.0.0.0",
+            "--policy",
+            "policies/draft_assist.yaml",
+            "--state-db",
+            str(tmp_path / "state.sqlite3"),
+            "--ledger",
+            str(tmp_path / "evidence.jsonl"),
+        ]
+    )
+
+    assert result == 2
+    assert "Refusing non-loopback bind without VMGA_BROKER_TOKEN" in capsys.readouterr().err
+
+
+def test_broker_main_requires_explicit_loopback_unauthenticated_opt_in(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("VMGA_APPROVAL_SECRET", "secret")
+    monkeypatch.delenv("VMGA_BROKER_TOKEN", raising=False)
+
+    result = broker_main(
+        [
+            "--policy",
+            "policies/draft_assist.yaml",
+            "--state-db",
+            str(tmp_path / "state.sqlite3"),
+            "--ledger",
+            str(tmp_path / "evidence.jsonl"),
+        ]
+    )
+
+    assert result == 2
+    assert "Refusing unauthenticated broker start" in capsys.readouterr().err
+
+
+def test_broker_main_allows_explicit_loopback_unauthenticated_dev(monkeypatch, tmp_path):
+    class FakeServer:
+        def serve_forever(self):
+            return None
+
+        def server_close(self):
+            return None
+
+    monkeypatch.setenv("VMGA_APPROVAL_SECRET", "secret")
+    monkeypatch.delenv("VMGA_BROKER_TOKEN", raising=False)
+    with patch("vmga.cli.make_server", return_value=FakeServer()) as make_server:
+        result = broker_main(
+            [
+                "--allow-unauthenticated",
+                "--policy",
+                "policies/draft_assist.yaml",
+                "--state-db",
+                str(tmp_path / "state.sqlite3"),
+                "--ledger",
+                str(tmp_path / "evidence.jsonl"),
+            ]
+        )
+
+    assert result == 0
+    assert make_server.call_args.args[0] == "127.0.0.1"
+    assert make_server.call_args.kwargs["bearer_token"] is None

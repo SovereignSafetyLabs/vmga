@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hmac
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional
@@ -121,7 +122,7 @@ class VMGAHTTPHandler(BaseHTTPRequestHandler):
     def _authorized(self) -> bool:
         if not self.bearer_token:
             return True
-        return self.headers.get("Authorization") == f"Bearer {self.bearer_token}"
+        return hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {self.bearer_token}")
 
     def do_GET(self) -> None:
         if not self._authorized():

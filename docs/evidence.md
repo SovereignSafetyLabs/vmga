@@ -1,7 +1,7 @@
 # VMGA Evidence Notes
 
-VMGA release evidence should prove the repository is safe to publish without
-overstating its security boundary.
+VMGA release evidence should show what was tested, reviewed, and bounded for a
+tagged release or live deployment without overstating VMGA's security boundary.
 
 ## What To Capture
 
@@ -46,7 +46,7 @@ boundary without cross-referencing hidden notes or oral context.
 
 ## Release Review
 
-Use `scripts/vmga_release_check.py` as a preflight gate before tagging a public
+Use `scripts/vmga_release_check.py` as a preflight gate before tagging a
 release. The script is intentionally conservative: missing required files or
 obvious secret patterns are treated as errors, while a missing `schemas/`
 directory is reported so the release reviewer can decide whether that is

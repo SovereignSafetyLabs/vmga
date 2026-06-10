@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -89,7 +90,24 @@ class SQLiteStateStore:
     def load_rate_limit_state(self, lockout_duration_seconds: int = 3600) -> Dict[str, Dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT attempt_key, payload FROM rate_limit_state").fetchall()
-        return {row["attempt_key"]: json.loads(row["payload"]) for row in rows}
+        now = datetime.now(timezone.utc)
+        active: Dict[str, Dict[str, Any]] = {}
+        stale_keys: list[str] = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            try:
+                first_attempt = datetime.fromisoformat(str(payload["first_attempt"]))
+            except (KeyError, TypeError, ValueError):
+                stale_keys.append(row["attempt_key"])
+                continue
+            if (now - first_attempt).total_seconds() >= lockout_duration_seconds:
+                stale_keys.append(row["attempt_key"])
+                continue
+            active[row["attempt_key"]] = payload
+        if stale_keys:
+            with self._connect() as conn:
+                conn.executemany("DELETE FROM rate_limit_state WHERE attempt_key = ?", [(key,) for key in stale_keys])
+        return active
 
     def save_lockdown_state(self, lockdown_active: bool, denial_counts: Dict[str, int]) -> None:
         with self._connect() as conn:

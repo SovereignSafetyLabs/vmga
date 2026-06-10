@@ -12,13 +12,13 @@ class FakeGmailBackend:
     messages: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     operations: List[Dict[str, Any]] = field(default_factory=list)
 
-    def search(self, query: str) -> Dict[str, Any]:
+    def search(self, query: str, max_results: int = 10) -> Dict[str, Any]:
         matches = [
             {"message_id": mid, **message}
             for mid, message in self.messages.items()
             if query.lower() in str(message).lower()
         ]
-        return {"messages": matches, "backend": "fake"}
+        return {"messages": matches[:max(0, int(max_results))], "backend": "fake"}
 
     def read(self, message_id: str) -> Dict[str, Any]:
         return {"message_id": message_id, **self.messages.get(message_id, {"subject": "Fake message", "body": ""})}

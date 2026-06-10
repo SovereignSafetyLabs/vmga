@@ -1,6 +1,7 @@
 # VMGA Release Checklist
 
-Before making VMGA public:
+Use this checklist before tagging or publishing a VMGA release, and before
+deploying VMGA with live mailbox credentials.
 
 - Verify the MIT License is present and reflected in package metadata.
 - Run the VMGA test suite.

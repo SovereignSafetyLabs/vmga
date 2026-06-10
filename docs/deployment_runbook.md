@@ -24,7 +24,7 @@ Minimum broker environment:
 
 ```text
 VMGA_APPROVAL_SECRET=<operator-owned secret>
-VMGA_BROKER_TOKEN=<optional loopback bearer token>
+VMGA_BROKER_TOKEN=<operator-owned broker bearer token>
 GOG_KEYRING_PASSWORD=<operator-owned keyring password>
 VMGA_BROKER_URL=http://127.0.0.1:8765
 ```
@@ -45,6 +45,12 @@ vmga-broker \
   --ledger-backups 5
 ```
 
+The broker CLI refuses unauthenticated startup by default. Use
+`--allow-unauthenticated` only for loopback-only fake-backend development, never
+for live mailbox credentials or remote ingress. The built-in HTTP server does
+not provide TLS; put it behind an authenticated local/private-network boundary
+or an external TLS-terminating ingress when it is not loopback-only.
+
 Use `launchd`, systemd, or another operator-owned supervisor for restart and log
 capture. The supervisor wrapper should source secrets from the operator-owned
 environment file and should not live in an agent-writable directory.
@@ -58,14 +64,22 @@ vmga-verify-evidence /path/outside/agent/evidence.jsonl --json
 ```
 
 If `/health` reports lockdown, inspect evidence first, then reset only through
-an operator-controlled maintenance path. If state or evidence writes fail,
-preserve the failed files for diagnosis and restart only after permissions,
-disk space, and policy paths are corrected.
+an operator-controlled maintenance path. `reset_lockdown` is an in-process
+maintenance API, not a public broker route; do not expose it to agents or remote
+callers without separate operator authentication. If state or evidence writes
+fail, preserve the failed files for diagnosis and restart only after
+permissions, disk space, and policy paths are corrected.
 
 SQLite state uses Write-Ahead Logging and a busy timeout so simultaneous broker
 callers can read while another request writes. This is not a queue by itself;
 high-volume batch callers should still serialize kinetic work at the agent or
 operator layer.
+
+The built-in broker is designed as a single-process control plane. Its adapter
+state lock serializes proposal, approval, execution, and lockdown-reset
+mutations inside that process. Do not run multiple broker processes against the
+same state database for hard-enforcement claims unless approval consumption is
+made transactional across processes.
 
 Each broker proposal receives a `correlation_id`. Supplying one in the request
 preserves the caller's ID; otherwise the broker generates one. Proposal, state,
