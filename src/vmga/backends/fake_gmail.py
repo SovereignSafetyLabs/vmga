@@ -7,6 +7,17 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
+def safe_attachment_path(output_dir: str | Path, attachment_id: str) -> Path:
+    base_dir = Path(output_dir).expanduser().resolve()
+    raw_name = str(attachment_id).strip()
+    if not raw_name or Path(raw_name).name != raw_name:
+        raise ValueError("unsafe attachment id")
+    output_path = (base_dir / f"{raw_name}.txt").resolve()
+    if not output_path.is_relative_to(base_dir):
+        raise ValueError("attachment path escapes output directory")
+    return output_path
+
+
 @dataclass
 class FakeGmailBackend:
     messages: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -29,7 +40,7 @@ class FakeGmailBackend:
         return {"status": "FAKE_EXECUTED", "operation": operation, "backend": "fake"}
 
     def download_attachment(self, attachment_id: str, output_dir: str | Path) -> Dict[str, Any]:
-        output_path = Path(output_dir) / f"{attachment_id}.txt"
+        output_path = safe_attachment_path(output_dir, attachment_id)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text("fake attachment content\n", encoding="utf-8")
         operation = {"action": "download_attachment", "attachment_id": attachment_id, "path": str(output_path)}

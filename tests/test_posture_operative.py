@@ -181,6 +181,17 @@ def test_legacy_modes_unchanged():
     assert check["status"] == "warn"
 
 
+def test_posture_warns_when_broker_process_is_root(monkeypatch):
+    monkeypatch.setattr(posture_module.os, "geteuid", lambda: 0, raising=False)
+
+    report = assess_posture(PostureConfig())
+
+    check = _check(report, "process_privilege")
+    assert check["status"] == "warn"
+    assert "root" in check["summary"]
+    assert report["hard_enforcement_ready"] is False
+
+
 def test_posture_contains_no_reimplemented_verification():
     source = inspect.getsource(posture_module)
     # No second copy of either check: no MAC computation, no key parsing,
