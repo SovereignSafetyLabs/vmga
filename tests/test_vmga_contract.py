@@ -506,6 +506,38 @@ def test_broker_executes_allowed_search_through_shipped_fake_backend():
         assert len(result["backend_result"]["messages"]) == 1
 
 
+def test_broker_rejects_action_parameter_smuggling():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        broker = VMGABroker(adapter)
+
+        result = broker.propose(
+            {
+                "action": "apply_label",
+                "actor_id": "agent_1",
+                "message_ids": ["m1"],
+                "parameters": {
+                    "label": "Needs Review",
+                    "reply_to_message_id": "smuggled-send-context",
+                },
+            }
+        )
+
+        assert result["status"] == "DENY"
+        assert result["error_code"] == "vmga_broker_bad_request"
+        assert "unknown broker parameter field" in result["error"]
+
+
+def test_fake_attachment_download_rejects_traversal(tmp_path: Path):
+    backend = FakeGmailBackend()
+
+    with pytest.raises(ValueError, match="unsafe attachment id"):
+        backend.download_attachment("../escape", tmp_path / "attachments")
+
+    assert not (tmp_path / "escape.txt").exists()
+    assert not (tmp_path / "attachments" / ".." / "escape.txt").resolve().exists()
+
+
 def test_broker_injects_correlation_id_into_results_and_evidence():
     with tempfile.TemporaryDirectory() as tmpdir:
         vesta = MockVesta()

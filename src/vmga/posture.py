@@ -106,6 +106,12 @@ def assess_posture(config: PostureConfig) -> Dict[str, Any]:
     agent_roots = config.agent_roots
     checks: List[Dict[str, str]] = []
 
+    geteuid = getattr(os, "geteuid", None)
+    if callable(geteuid) and geteuid() == 0:
+        checks.append(_check("process_privilege", WARN, "Broker process appears to be running as root; hard-boundary deployments should use a dedicated unprivileged runtime identity."))
+    else:
+        checks.append(_check("process_privilege", PASS, "Broker process is not running as root, or root status is not reported on this platform."))
+
     if config.bearer_token_set:
         checks.append(_check("broker_auth", PASS, "Broker bearer authentication is configured."))
     elif config.allow_unauthenticated and config.host in {"127.0.0.1", "::1", "localhost"}:
