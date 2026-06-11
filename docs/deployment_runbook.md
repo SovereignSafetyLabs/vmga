@@ -90,23 +90,17 @@ cron, or plugin write paths outside VMGA. Include a durable reference with
 reviewable deployment evidence.
 
 The posture self-check reports configured intent and observable placement, not
-<<<<<<< HEAD
-proof that every configured enforcement path has executed. `hmac_chain`
-evidence remains a design gate until the evidence-integrity implementation
-ships. `signature` approval mode verifies Ed25519 detached approvals with
-broker-held public keys only; it supports hard approval-enforcement claims only
-when the approver private key is isolated from both broker and agent authority
-domains. Residuals: private-key compromise, operator signing-device compromise,
-and intentional operator approval are outside VMGA's approval-signature
-boundary. HMAC approval mode remains broker-forgeable and advisory/dev.
-=======
-proof that every configured enforcement path has executed. Evidence integrity is
-active only when both evidence HMAC environment variables are present and the
-expected-head checkpoint is stored outside the agent-writable workspace. Without
-that anchor, JSONL evidence remains advisory and `vmga-verify-evidence` reports
-`cannot_verify`, never success. Approval signatures remain a design gate until
-the asymmetric approval-signature implementation ships.
->>>>>>> b5dcda4 (Add Tier-1 tamper-evident evidence ledger with HMAC chain (#2))
+proof that every configured enforcement path has executed. `signature` approval
+mode verifies Ed25519 detached approvals with broker-held public keys only; it
+supports hard approval-enforcement claims only when the approver private key is
+isolated from both broker and agent authority domains. Residuals: private-key
+compromise, operator signing-device compromise, and intentional operator
+approval are outside VMGA's approval-signature boundary. HMAC approval mode
+remains broker-forgeable and advisory/dev. Evidence integrity is active only
+when both evidence HMAC environment variables are present and the expected-head
+checkpoint is stored outside the agent-writable workspace. Without that anchor,
+JSONL evidence remains advisory and `vmga-verify-evidence` reports
+`cannot_verify`, never success.
 
 If `/health` reports lockdown, inspect evidence first, then reset only through
 an operator-controlled maintenance path. `reset_lockdown` is an in-process

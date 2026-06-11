@@ -195,6 +195,26 @@ def _collect_scannable_files(root: Path) -> list[Path]:
     return unique
 
 
+CONFLICT_MARKER_PATTERN = re.compile(r"^(<{7}|>{7})( |$)", re.MULTILINE)
+CONFLICT_SCAN_SUFFIXES = {".py", ".md", ".yaml", ".yml", ".ts", ".js", ".json", ".toml", ".txt", ".cfg", ".ini"}
+CONFLICT_SCAN_EXCLUDED_PARTS = {".git", "node_modules", "__pycache__", ".venv", "dist", "build"}
+
+
+def _check_conflict_markers(report: ReleaseReport, root: Path) -> None:
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix not in CONFLICT_SCAN_SUFFIXES:
+            continue
+        if CONFLICT_SCAN_EXCLUDED_PARTS.intersection(path.parts):
+            continue
+        if CONFLICT_MARKER_PATTERN.search(_read_text(path)):
+            report.add(
+                "error",
+                "merge_conflict_marker",
+                f"Unresolved merge conflict marker in {path.relative_to(root)}",
+                path=path,
+            )
+
+
 def run_release_check(root: Path | str | None = None) -> ReleaseReport:
     root_path = Path(root) if root is not None else REPO_ROOT
     report = ReleaseReport(root=str(root_path))
@@ -206,6 +226,7 @@ def run_release_check(root: Path | str | None = None) -> ReleaseReport:
     scannable_files = _collect_scannable_files(root_path)
     report.files_scanned = len(scannable_files)
 
+    _check_conflict_markers(report, root_path)
     _check_claim_hygiene(report, scannable_files)
     _scan_patterns(report, scannable_files, SECRET_PATTERNS, severity="error", code_prefix="secret_pattern")
     _scan_patterns(report, scannable_files, PUBLIC_IDENTITY_PATTERNS, severity="error", code_prefix="public_identity")

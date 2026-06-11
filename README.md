@@ -33,9 +33,6 @@ formal sandbox proof: it reports what VMGA can observe from configuration and
 operator-supplied attestations, and it deliberately fails toward unknown rather
 than optimistic hard-ready claims.
 
-<<<<<<< HEAD
-Tamper-evident evidence (`docs/evidence_integrity_design.md`) remains a v0.3.0
-design target: evidence is still append-only JSONL with advisory verification.
 VMGA now has opt-in Ed25519 approval-signature mode
 (`docs/approval_signing_design.md`). The broker holds public keys only, and hard
 approval-enforcement claims require the approver private key to live outside
@@ -43,16 +40,14 @@ both broker and agent authority domains. Residuals: VMGA cannot detect an
 attacker who controls the approver private key, a compromised operator signing
 device, or an operator intentionally signing a bad approval. HMAC approval mode
 remains available for advisory and development use and is broker-forgeable.
-=======
-VMGA supports opt-in tamper-evident evidence through a keyed HMAC chain when
-the broker is started with `VMGA_EVIDENCE_HMAC_KEY` and
-`VMGA_EVIDENCE_HMAC_KEY_ID`, and the expected-head checkpoint remains in
-operator-owned state. Without those settings, evidence remains append-only JSONL
-with advisory verification. The Tier-1 residual is plain: an actor who can
-rewrite evidence and also read the HMAC key, or forge the expected-head
-checkpoint, can rewrite the retained evidence chain. Out-of-domain approval
-signatures remain a v0.3.0 design record (`docs/approval_signing_design.md`).
->>>>>>> b5dcda4 (Add Tier-1 tamper-evident evidence ledger with HMAC chain (#2))
+
+VMGA also supports opt-in tamper-evident evidence through a keyed HMAC chain
+(`docs/evidence_integrity_design.md`) when the broker is started with
+`VMGA_EVIDENCE_HMAC_KEY` and `VMGA_EVIDENCE_HMAC_KEY_ID`, and the expected-head
+checkpoint remains in operator-owned state. Without those settings, evidence
+remains append-only JSONL with advisory verification. The Tier-1 residual is
+plain: an actor who can rewrite evidence and also read the HMAC key, or forge
+the expected-head checkpoint, can rewrite the retained evidence chain.
 
 ### Known Integration Advisory
 
