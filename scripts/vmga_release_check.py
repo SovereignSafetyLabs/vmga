@@ -77,6 +77,22 @@ REQUIRED_FILES = [
     "docs/action_catalog.md",
 ]
 
+REQUIRED_DOC_PHRASES: dict[str, list[str]] = {
+    "docs/release_checklist.md": [
+        "## Automated Repo Gates",
+        "## Manual Operator Evidence",
+        "## Runtime Posture Gate",
+        "## v0.3.0 Gates",
+        "scripts/vmga_release_check.py --json",
+    ],
+    "docs/dsovs_readiness.md": [
+        "not OWASP certification",
+        "## Control Mapping",
+        "## Non-Applicable Or Bounded Areas",
+        "## Gap Handling",
+    ],
+}
+
 CLAIM_HYGIENE_PATTERNS: dict[str, re.Pattern[str]] = {
     "prompt_injection": re.compile(r"does not claim[\s\S]{0,220}?prompt[- ]injection prevention", re.IGNORECASE),
     "dlp": re.compile(r"does not claim[\s\S]{0,220}?\bDLP\b", re.IGNORECASE),
@@ -120,6 +136,22 @@ def _required_files(report: ReleaseReport, root: Path) -> None:
         path = root / rel
         if not path.exists():
             report.add("error", "required_file_missing", f"Required file is missing: {rel}", path=path)
+
+
+def _check_required_doc_phrases(report: ReleaseReport, root: Path) -> None:
+    for rel, phrases in REQUIRED_DOC_PHRASES.items():
+        path = root / rel
+        if not path.exists():
+            continue
+        text = _read_text(path)
+        for phrase in phrases:
+            if phrase not in text:
+                report.add(
+                    "error",
+                    "required_doc_phrase_missing",
+                    f"Required release-governance phrase is missing: {phrase}",
+                    path=path,
+                )
 
 
 def _check_schema_dir(report: ReleaseReport, root: Path) -> None:
@@ -307,6 +339,7 @@ def run_release_check(root: Path | str | None = None) -> ReleaseReport:
     report = ReleaseReport(root=str(root_path))
 
     _required_files(report, root_path)
+    _check_required_doc_phrases(report, root_path)
     _check_schema_dir(report, root_path)
     _check_policy_yaml(report, root_path)
     _check_action_catalog(report, root_path)

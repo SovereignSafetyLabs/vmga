@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "plugin:build": "npm run build && openclaw plugins build --root . --entry ./dist/index.js",
     "plugin:validate": "npm run build && openclaw plugins validate --root . --entry ./dist/index.js",
-    "test": "vitest run"
+    "test": "vitest run src"
   },
   "files": [
     "dist",

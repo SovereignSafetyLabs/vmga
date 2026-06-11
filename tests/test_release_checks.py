@@ -46,11 +46,38 @@ def _populate_safe_repo(root: Path) -> None:
     _write(root / "README.md", "VMGA does not claim prompt-injection prevention, DLP, host compromise protection, browser/session isolation, compliance certification, or security of Hermes/OpenClaw internals.\n")
     _write(root / "SECURITY.md", "Report security issues here.\n")
     _write(root / "CONTRIBUTING.md", "Contribution guidance.\n")
-    _write(root / "docs" / "release_checklist.md", "Release checklist.\n")
+    _write(root / "docs" / "release_checklist.md", """
+        # VMGA Release Checklist
+
+        ## Automated Repo Gates
+        Run `scripts/vmga_release_check.py --json`.
+
+        ## Manual Operator Evidence
+        Capture deployment evidence.
+
+        ## Runtime Posture Gate
+        Capture posture output.
+
+        ## v0.3.0 Gates
+        Verify signature and evidence integrity.
+    """)
     _write(root / "docs" / "deployment_runbook.md", "Deployment runbook.\n")
     _write(root / "docs" / "openclaw_integration.md", "OpenClaw integration.\n")
     _write(root / "docs" / "hermes_integration.md", "Hermes integration.\n")
-    _write(root / "docs" / "dsovs_readiness.md", "DSOVS readiness.\n")
+    _write(root / "docs" / "dsovs_readiness.md", """
+        # DSOVS Readiness Mapping
+
+        This file is not OWASP certification.
+
+        ## Control Mapping
+        Evidence map.
+
+        ## Non-Applicable Or Bounded Areas
+        Bounded controls.
+
+        ## Gap Handling
+        Track repo gaps as issues.
+    """)
     _write(root / "docs" / "evidence.md", "VMGA does not claim prompt-injection prevention, DLP, host compromise protection, browser/session isolation, compliance certification, or security of Hermes/OpenClaw internals.\n")
     _write(root / "docs" / "gmail_backend_options.md", "VMGA does not claim prompt-injection prevention, DLP, host compromise protection, browser/session isolation, compliance certification, or security of Hermes/OpenClaw internals.\n")
     _write(root / "docs" / "action_catalog.md", """
@@ -181,6 +208,17 @@ def test_release_check_reports_missing_required_file(tmp_path: Path) -> None:
 
     assert any(item.code == "required_file_missing" for item in report.errors)
     assert any(item.path and item.path.endswith("CONTRIBUTING.md") for item in report.errors)
+
+
+def test_release_check_flags_missing_release_governance_sections(tmp_path: Path) -> None:
+    _populate_safe_repo(tmp_path)
+    _write(tmp_path / "docs" / "release_checklist.md", "# VMGA Release Checklist\n\n## Automated Repo Gates\n")
+    checker = _load_release_checker()
+
+    report = checker.run_release_check(tmp_path)
+
+    assert any(item.code == "required_doc_phrase_missing" for item in report.errors)
+    assert any("Manual Operator Evidence" in item.message for item in report.errors)
 
 
 def test_release_check_flags_action_catalog_drift(tmp_path: Path) -> None:
