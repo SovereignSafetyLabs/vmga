@@ -1458,7 +1458,11 @@ class VMGAGmailAdapter:
             return False, "Proposal hash mismatch (mutation detected)", "vmga_approval_hash_mismatch"
 
         if approval.binding_hash:
-            expected_binding_hash = approval.expected_binding_hash()
+            try:
+                expected_binding_hash = approval.expected_binding_hash()
+            except (TypeError, ValueError):
+                self._record_failed_attempt(attempt_key, now)
+                return False, "Approval binding hash mismatch (approval record mutation detected)", "vmga_approval_binding_mismatch"
             if not hmac.compare_digest(approval.binding_hash, expected_binding_hash):
                 self._record_failed_attempt(attempt_key, now)
                 return False, "Approval binding hash mismatch (approval record mutation detected)", "vmga_approval_binding_mismatch"

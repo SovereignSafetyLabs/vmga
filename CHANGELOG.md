@@ -32,6 +32,10 @@ All notable changes to VMGA will be documented here.
   execution across independent broker processes. Approvals are consumed before
   backend execution; failures after consumption are not replayable and require a
   new proposal.
+- Added approval binding-mutation coverage for persisted record tampering,
+  type-confused approval payloads, request bit-flips, stale HMAC windows, and
+  signature payload mutation; malformed bindings now deny without executing the
+  backend handler.
 
 ## v0.2.1 - 2026-06-10
 

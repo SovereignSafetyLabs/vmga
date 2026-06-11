@@ -61,6 +61,37 @@ def make_adapter(state_store):
     )
 
 
+def approve_sqlite_draft(db_path: str):
+    adapter = make_adapter(SQLiteStateStore(db_path))
+    result = adapter.propose_action(
+        "create_draft",
+        "agent_1",
+        content="Draft",
+        parameters={"subject": "Approved subject"},
+        justification="Test",
+    )
+    token = adapter.compute_approval_token(result["proposal_id"], result["proposal_hash"], "operator_1")
+    assert adapter.approve_proposal(result["proposal_id"], "operator_1", token)["status"] == "APPROVED"
+    return result, token
+
+
+def bitflip_hex_digest(value: str) -> str:
+    prefix, digest = value.split(":", 1)
+    replacement = "0" if digest[-1] != "0" else "1"
+    return f"{prefix}:{digest[:-1]}{replacement}"
+
+
+def mutate_sqlite_approval(db_path: str, proposal_id: str, mutate):
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT payload FROM approvals WHERE proposal_id = ?", (proposal_id,)).fetchone()
+        payload = json.loads(row[0])
+        mutate(payload)
+        conn.execute(
+            "UPDATE approvals SET payload = ? WHERE proposal_id = ?",
+            (json.dumps(payload, sort_keys=True), proposal_id),
+        )
+
+
 def test_versioned_proposal_contract_round_trip():
     proposal = VMGAProposal(
         proposal_id="prop_1",
@@ -171,6 +202,87 @@ def test_sqlite_approval_consumed_before_execution_failure_denies_replay_after_r
         replay = restarted.execute_approved(result["proposal_id"], result["proposal_hash"], token, lambda request: {"ok": True})
         assert replay["status"] == "DENY"
         assert replay["error_code"] == "vmga_approval_already_used"
+
+
+@pytest.mark.parametrize(
+    ("name", "mutate", "expected_codes"),
+    [
+        ("proposal_hash_bitflip", lambda p: p.update({"proposal_hash": bitflip_hex_digest(p["proposal_hash"])}), {"vmga_approval_hash_mismatch"}),
+        ("approver_id_change", lambda p: p.update({"approver_id": "operator_2"}), {"vmga_approval_binding_mismatch"}),
+        ("action_change", lambda p: p.update({"action": "send"}), {"vmga_approval_binding_mismatch"}),
+        ("recipients_change", lambda p: p.update({"recipients": ["attacker@example.com"]}), {"vmga_approval_binding_mismatch"}),
+        ("content_change", lambda p: p.update({"content": "Changed content"}), {"vmga_approval_binding_mismatch"}),
+        ("parameters_change", lambda p: p.update({"parameters": {"subject": "Changed"}}), {"vmga_approval_binding_mismatch"}),
+        ("expires_at_change", lambda p: p.update({"expires_at": "2999-01-01T00:00:00+00:00"}), {"vmga_approval_binding_mismatch"}),
+        ("blank_binding_hash", lambda p: p.update({"binding_hash": ""}), {"vmga_approval_binding_missing"}),
+        ("recipients_type_confusion", lambda p: p.update({"recipients": ["ops@example.com", 7]}), {"vmga_approval_binding_mismatch"}),
+        ("message_ids_type_confusion", lambda p: p.update({"message_ids": 7}), {"vmga_approval_binding_mismatch"}),
+        ("parameters_type_confusion", lambda p: p.update({"parameters": ["not", "a", "mapping"]}), {"vmga_approval_binding_mismatch"}),
+        ("used_string_type_confusion", lambda p: p.update({"used": "false"}), {"vmga_approval_already_used"}),
+    ],
+)
+def test_persisted_approval_mutation_matrix_denies_without_execution(name, mutate, expected_codes):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "vmga.sqlite3")
+        result, token = approve_sqlite_draft(db_path)
+        mutate_sqlite_approval(db_path, result["proposal_id"], mutate)
+        restarted = make_adapter(SQLiteStateStore(db_path))
+        execution_count = 0
+
+        def handler(_request):
+            nonlocal execution_count
+            execution_count += 1
+            return {"ok": True}
+
+        outcome = restarted.execute_approved(result["proposal_id"], result["proposal_hash"], token, handler)
+        assert outcome["status"] == "DENY", name
+        assert outcome["error_code"] in expected_codes
+        assert execution_count == 0
+
+
+@pytest.mark.parametrize(
+    ("name", "proposal_hash_mutator", "token_mutator", "expected_codes"),
+    [
+        ("proposal_hash_bitflip", bitflip_hex_digest, lambda token: token, {"vmga_approval_hash_mismatch"}),
+        ("token_bitflip", lambda proposal_hash: proposal_hash, lambda token: token[:-1] + ("0" if token[-1] != "0" else "1"), {"vmga_approval_token_mismatch"}),
+    ],
+)
+def test_execution_request_bitflips_deny_without_execution(name, proposal_hash_mutator, token_mutator, expected_codes):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "vmga.sqlite3")
+        result, token = approve_sqlite_draft(db_path)
+        restarted = make_adapter(SQLiteStateStore(db_path))
+        execution_count = 0
+
+        def handler(_request):
+            nonlocal execution_count
+            execution_count += 1
+            return {"ok": True}
+
+        outcome = restarted.execute_approved(
+            result["proposal_id"],
+            proposal_hash_mutator(result["proposal_hash"]),
+            token_mutator(token),
+            handler,
+        )
+
+        assert outcome["status"] == "DENY", name
+        assert outcome["error_code"] in expected_codes
+        assert execution_count == 0
+
+
+def test_stale_hmac_approval_window_denies_before_approval_record_exists():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        result = adapter.propose_action("create_draft", "agent_1", content="Draft", justification="Test")
+        old_window = VMGAGmailAdapter.approval_time_window(datetime.now(timezone.utc) - timedelta(minutes=15))
+        stale_token = adapter.compute_approval_token(result["proposal_id"], result["proposal_hash"], "operator_1", old_window)
+
+        approval = adapter.approve_proposal(result["proposal_id"], "operator_1", stale_token)
+
+        assert approval["status"] == "DENY"
+        assert approval["error_code"] == "vmga_approval_token_invalid"
+        assert result["proposal_id"] not in adapter.approvals
 
 
 def test_sqlite_state_uses_wal_and_busy_timeout():

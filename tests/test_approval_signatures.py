@@ -198,6 +198,28 @@ def test_algorithm_mismatch_is_denied():
         assert adapter.approve_proposal(proposal["proposal_id"], "operator_1", **signed)["error_code"] == "vmga_signature_algorithm_mismatch"
 
 
+def test_signature_approval_payload_mutation_denies_without_execution():
+    key = Ed25519PrivateKey.generate()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = _adapter(tmpdir, {"operator_1": [_key_entry(key, "operator-current")]})
+        proposal = _proposal(adapter)
+        signed = _signed(adapter, key, proposal)
+        assert adapter.approve_proposal(proposal["proposal_id"], "operator_1", **signed)["status"] == "APPROVED"
+        adapter.approvals[proposal["proposal_id"]].signature_payload = ["not", "a", "signed", "payload"]
+        execution_count = 0
+
+        def handler(_request):
+            nonlocal execution_count
+            execution_count += 1
+            return {"ok": True}
+
+        outcome = adapter.execute_approved(proposal["proposal_id"], proposal["proposal_hash"], "", handler)
+
+        assert outcome["status"] == "DENY"
+        assert outcome["error_code"] == "vmga_signature_invalid"
+        assert execution_count == 0
+
+
 def test_private_key_never_needed_by_broker_signer_payload_can_be_cli_signed(tmp_path, capsys):
     from vmga.cli import approval_sign_main
 
