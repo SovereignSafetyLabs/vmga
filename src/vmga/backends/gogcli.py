@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -20,6 +21,10 @@ def _cap_text(value: str, limit: int = 4000) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + "...[truncated]"
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", errors="surrogatepass")).hexdigest()
 
 
 @dataclass
@@ -110,7 +115,7 @@ class GogCLIBackend:
 
         if completed.returncode != 0:
             rate_limited = self._is_rate_limited(completed.stdout, completed.stderr)
-            return {
+            result: Dict[str, Any] = {
                 "status": "ERROR",
                 "backend": "gogcli",
                 "error_code": "vmga_gogcli_rate_limited" if rate_limited else "vmga_gogcli_failed",
@@ -119,6 +124,11 @@ class GogCLIBackend:
                 "stdout": _cap_text(completed.stdout.strip()),
                 "stderr": _cap_text(completed.stderr.strip()),
             }
+            if completed.stdout:
+                result["stdout_full_sha256"] = _sha256_text(completed.stdout)
+            if completed.stderr:
+                result["stderr_full_sha256"] = _sha256_text(completed.stderr)
+            return result
 
         stdout = completed.stdout.strip()
         if not stdout:

@@ -181,8 +181,16 @@ def _check_policy_yaml(report: ReleaseReport, root: Path) -> None:
 
     for path in policy_files:
         try:
-            load_vmga_policy(str(path))
+            policy = load_vmga_policy(str(path))
             report.policies_checked += 1
+            domains = policy.get("domain_policy", {}).get("internal_domains", policy.get("internal_domains", []))
+            if isinstance(domains, list) and any(str(domain).lower() == "company.com" for domain in domains):
+                report.add(
+                    "warning",
+                    "policy_placeholder_internal_domain",
+                    "Policy internal_domains contains the placeholder company.com; replace it before live deployment.",
+                    path=path,
+                )
         except Exception as exc:  # noqa: BLE001 - release check should surface loader failures
             report.add("error", "policy_load_failed", f"Policy YAML failed to load: {exc}", path=path)
 

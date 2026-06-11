@@ -32,6 +32,9 @@ This does not detect or prevent:
 - an attacker who controls the approver private key;
 - compromise of the operator signing device;
 - an operator intentionally signing a malicious approval.
+- false `actor_id` provenance supplied by an upstream runtime unless the
+  deployment binds broker authentication, channel identity, or routing evidence
+  to the claimed actor.
 
 Those residuals are out of scope for this design and must be named in any
 hard-enforcement deployment claim.
@@ -48,6 +51,21 @@ forgeability: the broker can still mint approvals.
 The broker is configured with approver public keys only. The broker verifies
 signatures and records approved proposals; it does not sign. Signing happens in
 an external operator-side signer.
+
+## Second-Order Residuals
+
+Approval signatures bind exactly the proposal VMGA has recorded; they do not
+prove that an upstream agent runtime honestly named the originating actor unless
+the deployment separately binds broker credentials, channel identity, or routing
+evidence to `actor_id`. Operators should treat `actor_id` as governed metadata
+unless that upstream provenance chain is part of the deployment evidence.
+
+VMGA pressure and risk signals are evidence aids, not semantic completeness
+claims. Keyword and pattern detectors can miss homoglyphs, paraphrases,
+non-English pressure, encoded text, or rendered-content tricks. The approval
+signature still binds the canonical proposal bytes that VMGA recorded, but the
+human reviewer remains responsible for inspecting the proposed content and
+recipient context.
 
 ## Signed Message
 

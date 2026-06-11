@@ -166,6 +166,11 @@ Use `scripts/vmga_live_smoke.py` only after the broker is running and gog auth
 has been configured in an operator-owned gog home. The smoke script calls the
 broker, not gog directly.
 
+**Live draft warning:** `--create-draft` creates a real Gmail draft. Use the
+default `[VMGA-SMOKE]` tag or another unique subject/body marker, verify the
+draft in Gmail, then search for that marker in Drafts and delete the generated
+drafts before sharing evidence or tagging a release.
+
 Read/search and send-denial probe:
 
 ```bash

@@ -157,6 +157,21 @@ def test_gogcli_retries_rate_limits_with_backoff():
     assert result["status"] == "SUCCESS"
 
 
+def test_gogcli_error_output_is_capped_but_hashed():
+    stderr = "credential unlock failed " + ("x" * 5000)
+    completed = subprocess.CompletedProcess(args=[], returncode=1, stdout="partial stdout", stderr=stderr)
+    with patch("vmga.backends.gogcli.subprocess.run", return_value=completed):
+        backend = GogCLIBackend(binary="/opt/homebrew/bin/gog-agent-safe")
+        result = backend.search("in:inbox", max_results=1)
+
+    assert result["status"] == "ERROR"
+    assert result["stdout"] == "partial stdout"
+    assert result["stderr"].endswith("...[truncated]")
+    assert len(result["stderr"]) < len(stderr)
+    assert result["stdout_full_sha256"]
+    assert result["stderr_full_sha256"]
+
+
 def test_executor_passes_approval_bound_payload_to_backend():
     class CapturingBackend:
         def __init__(self):

@@ -178,6 +178,25 @@ def test_release_check_flags_secret_like_content(tmp_path: Path) -> None:
     assert any(item.code == "secret_pattern_github_token" for item in report.errors)
 
 
+def test_release_check_warns_on_company_placeholder_internal_domain(tmp_path: Path) -> None:
+    _populate_safe_repo(tmp_path)
+    _write(tmp_path / "policies" / "draft_assist.yaml", """
+        vmga_version: "0.2.0"
+        profile: draft_assist
+        allowed_actions: [read, summarize, create_draft]
+        denied_actions: [send, forward]
+        kinetic_requires_approval: true
+        domain_policy:
+          internal_domains: [company.com]
+    """)
+    checker = _load_release_checker()
+
+    report = checker.run_release_check(tmp_path)
+
+    assert report.errors == []
+    assert any(item.code == "policy_placeholder_internal_domain" for item in report.warnings)
+
+
 def test_release_check_flags_personal_gmail_addresses_in_public_docs(tmp_path: Path) -> None:
     _populate_safe_repo(tmp_path)
     _write(tmp_path / "docs" / "unsafe.md", "operator mailbox: person@gmail.com\n")
