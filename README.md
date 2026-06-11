@@ -34,20 +34,22 @@ operator-supplied attestations, and it deliberately fails toward unknown rather
 than optimistic hard-ready claims.
 
 VMGA now has opt-in Ed25519 approval-signature mode
-(`docs/approval_signing_design.md`). The broker holds public keys only, and hard
-approval-enforcement claims require the approver private key to live outside
-both broker and agent authority domains. Residuals: VMGA cannot detect an
-attacker who controls the approver private key, a compromised operator signing
-device, or an operator intentionally signing a bad approval. HMAC approval mode
-remains available for advisory and development use and is broker-forgeable.
+([approval signing design](docs/approval_signing_design.md)). The broker holds
+public keys only, and hard approval-enforcement claims require the approver
+private key to live outside both broker and agent authority domains. Residuals:
+VMGA cannot detect an attacker who controls the approver private key, a
+compromised operator signing device, or an operator intentionally signing a bad
+approval. HMAC approval mode remains available for advisory and development use
+and is broker-forgeable.
 
 VMGA also supports opt-in tamper-evident evidence through a keyed HMAC chain
-(`docs/evidence_integrity_design.md`) when the broker is started with
-`VMGA_EVIDENCE_HMAC_KEY` and `VMGA_EVIDENCE_HMAC_KEY_ID`, and the expected-head
-checkpoint remains in operator-owned state. Without those settings, evidence
-remains append-only JSONL with advisory verification. The Tier-1 residual is
-plain: an actor who can rewrite evidence and also read the HMAC key, or forge
-the expected-head checkpoint, can rewrite the retained evidence chain.
+([evidence integrity design](docs/evidence_integrity_design.md)) when the
+broker is started with `VMGA_EVIDENCE_HMAC_KEY` and
+`VMGA_EVIDENCE_HMAC_KEY_ID`, and the expected-head checkpoint remains in
+operator-owned state. Without those settings, evidence remains append-only
+JSONL with advisory verification. The Tier-1 residual is plain: an actor who
+can rewrite evidence and also read the HMAC key, or forge the expected-head
+checkpoint, can rewrite the retained evidence chain.
 
 ### Known Integration Advisory
 
@@ -55,13 +57,14 @@ VMGA's core broker path does not depend on OpenClaw. The optional OpenClaw
 integration currently tracks OpenClaw `2026.6.5` as an external runtime and test
 fixture. The OpenClaw integration's dev dependency tree includes a
 medium-severity `hono < 4.12.21` advisory inside OpenClaw's shrinkwrapped npm
-dependency tree. Production installs (`npm audit --omit=dev`) are clean, and
-GitHub Dependabot currently reports no open alerts. The vulnerable copy is
-pinned inside OpenClaw's published package, so VMGA cannot safely override it
-from this repository. Do not expose an OpenClaw-backed VMGA deployment to remote
-ingress until OpenClaw is patched or the deployment supplies an equivalent
-patched runtime with loopback/private-network binding, token or trusted-proxy
-auth, operator allowlists, sandboxing, and direct-bypass evidence.
+dependency tree. Production installs (`npm audit --omit=dev`) are clean, while
+GitHub Dependabot may surface the upstream dev-transitive advisory as
+default-branch moderate alerts. The vulnerable copy is pinned inside OpenClaw's
+published package, so VMGA cannot safely override it from this repository. Do
+not expose an OpenClaw-backed VMGA deployment to remote ingress until OpenClaw
+is patched or the deployment supplies an equivalent patched runtime with
+loopback/private-network binding, token or trusted-proxy auth, operator
+allowlists, sandboxing, and direct-bypass evidence.
 
 ## What VMGA Governs
 
@@ -70,7 +73,7 @@ auth, operator allowlists, sandboxing, and direct-bypass evidence.
 - Attachment download and release.
 - Proposal hashing, approval binding, execution integrity, and lockdown.
 - Action-tier cataloging with release-check drift protection in
-  `docs/action_catalog.md`.
+  [docs/action_catalog.md](docs/action_catalog.md).
 - Multi-turn pressure evidence through `vmga_pressure_signal` events for
   repeated denials, urgency or authority-language pressure, and proposal
   mutation attempts.
@@ -83,6 +86,20 @@ policies/          Example VMGA policy profiles
 docs/              Specification, deployment, and readiness notes
 tests/             Unit tests
 ```
+
+## Key Docs
+
+- [Release checklist](docs/release_checklist.md)
+- [Deployment runbook](docs/deployment_runbook.md)
+- [Action catalog](docs/action_catalog.md)
+- [Evidence notes](docs/evidence.md)
+- [Evidence integrity architecture](docs/evidence_integrity_design.md)
+- [Approval signing architecture](docs/approval_signing_design.md)
+- [Hermes integration notes](docs/hermes_integration.md)
+- [OpenClaw integration notes](docs/openclaw_integration.md)
+- [Gmail backend options](docs/gmail_backend_options.md)
+- [DSOVS readiness mapping](docs/dsovs_readiness.md)
+- [Historical v0.2 spec](docs/vmga_spec_v0.2.md)
 
 ## Quickstart
 
@@ -97,10 +114,12 @@ Safe local playground, no Gmail account or OAuth credentials required:
 python scripts/vmga_fixture_playground.py --force
 ```
 
-The playground uses `examples/fixtures/safe_mailbox.json` with the fake Gmail
-backend and writes local artifacts under `artifacts/vmga-fixture-playground/`.
-It uses a fixture-only in-memory approval secret and no live keyring, OAuth
-token, broker token, gog config, or network service.
+The playground uses
+[examples/fixtures/safe_mailbox.json](examples/fixtures/safe_mailbox.json) with
+the fake Gmail backend and writes local artifacts under
+`artifacts/vmga-fixture-playground/`. It uses a fixture-only in-memory approval
+secret and no live keyring, OAuth token, broker token, gog config, or network
+service.
 Its terminal output includes deterministic `VMGA_PLAYGROUND` lines showing a
 direct execution bypass denial, repeated-denial `vmga_pressure_signal` evidence,
 proposal-mutation `vmga_pressure_signal` evidence, and a replay denial with
@@ -197,7 +216,8 @@ so the operator can search for and bulk-delete generated drafts.
 ## Design Influences
 
 - The original VMGA reference implementation in Vesta Agent Runtime Governance.
-- The VMGA v0.2 specification carried into `docs/vmga_spec_v0.2.md`.
+- The VMGA v0.2 specification carried into
+  [docs/vmga_spec_v0.2.md](docs/vmga_spec_v0.2.md).
 - `orlyjamie/hardmail`, as prior art for a shell-free Hermes mail surface. VMGA
   borrows that ergonomics direction, not hardmail's self-gated approval model.
 - OWASP DSOVS, as a release-readiness and evidence self-assessment lens. This

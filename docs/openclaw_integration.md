@@ -58,9 +58,10 @@ VMGA treats OpenClaw as an optional external runtime, not as part of the VMGA
 broker. The npm package for OpenClaw `2026.6.5` currently ships a shrinkwrapped
 dependency tree that pins `hono@4.12.18`. Local full dev audits report multiple
 medium-severity advisories fixed by `hono >= 4.12.21`; production audits
-(`npm audit --omit=dev`) are clean, and GitHub Dependabot currently reports no
-open alerts. Because the vulnerable copy is pinned inside OpenClaw's published
-shrinkwrap, VMGA's package-level `overrides` cannot reliably replace it.
+(`npm audit --omit=dev`) are clean. GitHub Dependabot may surface the upstream
+dev-transitive advisory as default-branch moderate alerts. Because the
+vulnerable copy is pinned inside OpenClaw's published shrinkwrap, VMGA's
+package-level `overrides` cannot reliably replace it.
 
 Until OpenClaw publishes a patched runtime, keep OpenClaw VMGA deployments local
 or private-network only and treat any remote exposure as blocked unless the

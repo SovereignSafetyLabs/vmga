@@ -4,8 +4,7 @@ All notable changes to VMGA will be documented here.
 
 ## Unreleased
 
-- Added a safe local fixture playground with fake mailbox data, deterministic
-  terminal evidence logs, replay-denial output, and no Gmail/OAuth dependency.
+- No unreleased changes.
 
 ## [0.3.0] - 2026-06-11
 
@@ -41,9 +40,13 @@ All notable changes to VMGA will be documented here.
   default approval posture, and baseline-deny behavior.
 - Added first-class `vmga_pressure_signal` evidence for repeated denials,
   urgency or authority-language pressure, and proposal mutation attempts.
+- Added a safe local fixture playground with fake mailbox data, deterministic
+  terminal evidence logs, replay-denial output, and no Gmail/OAuth dependency.
 
 ### Changed
 
+- Added README links to the main architecture, deployment, evidence,
+  integration, and readiness docs for GitHub readers.
 - Posture now checks that signature approval mode and chain evidence modes are
   operative, not merely declared: signature mode passes only with a loaded
   active Ed25519 keyring, and chain modes pass only when the existing chain
