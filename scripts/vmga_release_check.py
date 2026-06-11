@@ -20,7 +20,7 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from vmga.vmga_adapter import load_vmga_policy
+from vmga.vmga_adapter import ActionClass, GmailAction, VMGAPolicy, load_vmga_policy
 from vmga.redaction import SECRET_PATTERNS
 
 
@@ -74,6 +74,7 @@ REQUIRED_FILES = [
     "docs/dsovs_readiness.md",
     "docs/evidence.md",
     "docs/gmail_backend_options.md",
+    "docs/action_catalog.md",
 ]
 
 CLAIM_HYGIENE_PATTERNS: dict[str, re.Pattern[str]] = {
@@ -198,6 +199,91 @@ def _collect_scannable_files(root: Path) -> list[Path]:
 CONFLICT_MARKER_PATTERN = re.compile(r"^(<{7}|>{7})( |$)", re.MULTILINE)
 CONFLICT_SCAN_SUFFIXES = {".py", ".md", ".yaml", ".yml", ".ts", ".js", ".json", ".toml", ".txt", ".cfg", ".ini"}
 CONFLICT_SCAN_EXCLUDED_PARTS = {".git", "node_modules", "__pycache__", ".venv", "dist", "build"}
+ACTION_CATALOG_PATTERN = re.compile(
+    r"<!-- BEGIN VMGA_ACTION_CATALOG -->\s*```json\s*(?P<payload>\{[\s\S]*?\})\s*```\s*<!-- END VMGA_ACTION_CATALOG -->",
+    re.MULTILINE,
+)
+
+
+def _expected_baseline_denies() -> dict[str, list[str]]:
+    return {
+        action.value: sorted(
+            deny
+            for deny, actions in {
+                "credential_transmission": {GmailAction.SEND, GmailAction.FORWARD, GmailAction.CREATE_DRAFT},
+                "mfa_recovery_handling": {GmailAction.SEND, GmailAction.FORWARD},
+                "bulk_forwarding": {GmailAction.SEND, GmailAction.FORWARD},
+                "financial_instructions": {GmailAction.SEND, GmailAction.FORWARD},
+            }.items()
+            if action in actions
+        )
+        for action in GmailAction
+    }
+
+
+def _check_action_catalog(report: ReleaseReport, root: Path) -> None:
+    path = root / "docs" / "action_catalog.md"
+    if not path.exists():
+        return
+
+    text = _read_text(path)
+    match = ACTION_CATALOG_PATTERN.search(text)
+    if not match:
+        report.add("error", "action_catalog_block_missing", "docs/action_catalog.md is missing the checked JSON catalog block", path=path)
+        return
+
+    try:
+        payload = json.loads(match.group("payload"))
+    except json.JSONDecodeError as exc:
+        report.add("error", "action_catalog_json_invalid", f"Action catalog JSON failed to parse: {exc}", path=path)
+        return
+
+    if payload.get("schema_version") != "vmga-action-catalog-v1":
+        report.add("error", "action_catalog_schema_invalid", "Action catalog schema_version must be vmga-action-catalog-v1", path=path)
+        return
+
+    rows = payload.get("actions")
+    if not isinstance(rows, list):
+        report.add("error", "action_catalog_actions_invalid", "Action catalog actions must be a list", path=path)
+        return
+
+    actual_by_action = {row.get("action"): row for row in rows if isinstance(row, dict)}
+    expected_actions = {action.value for action in GmailAction}
+    actual_actions = set(actual_by_action)
+    missing = sorted(expected_actions - actual_actions)
+    extra = sorted(actual_actions - expected_actions)
+    if missing:
+        report.add("error", "action_catalog_action_missing", f"Action catalog missing action(s): {', '.join(missing)}", path=path)
+    if extra:
+        report.add("error", "action_catalog_action_unknown", f"Action catalog has unknown action(s): {', '.join(extra)}", path=path)
+
+    policy = VMGAPolicy("catalog_release_check", {})
+    expected_baseline = _expected_baseline_denies()
+    for action in GmailAction:
+        row = actual_by_action.get(action.value)
+        if not row:
+            continue
+        expected_class = "non_kinetic" if policy.classify_action(action) == ActionClass.NON_KINETIC else "kinetic"
+        if row.get("class") != expected_class:
+            report.add("error", "action_catalog_class_drift", f"{action.value} class is {row.get('class')!r}, expected {expected_class!r}", path=path)
+
+        default_approval = row.get("default_approval")
+        expected_approval = "not_required" if expected_class == "non_kinetic" else "required"
+        if default_approval != expected_approval:
+            report.add("error", "action_catalog_approval_drift", f"{action.value} default_approval is {default_approval!r}, expected {expected_approval!r}", path=path)
+
+        baseline_denies = row.get("baseline_denies")
+        if not isinstance(baseline_denies, list) or sorted(baseline_denies) != expected_baseline[action.value]:
+            report.add(
+                "error",
+                "action_catalog_baseline_drift",
+                f"{action.value} baseline_denies is {baseline_denies!r}, expected {expected_baseline[action.value]!r}",
+                path=path,
+            )
+
+        risk_vectors = row.get("risk_vectors")
+        if not isinstance(risk_vectors, list) or not all(isinstance(item, str) and item for item in risk_vectors):
+            report.add("error", "action_catalog_risk_vectors_invalid", f"{action.value} risk_vectors must be a non-empty string list", path=path)
 
 
 def _check_conflict_markers(report: ReleaseReport, root: Path) -> None:
@@ -222,6 +308,7 @@ def run_release_check(root: Path | str | None = None) -> ReleaseReport:
     _required_files(report, root_path)
     _check_schema_dir(report, root_path)
     _check_policy_yaml(report, root_path)
+    _check_action_catalog(report, root_path)
 
     scannable_files = _collect_scannable_files(root_path)
     report.files_scanned = len(scannable_files)

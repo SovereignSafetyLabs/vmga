@@ -53,6 +53,33 @@ def _populate_safe_repo(root: Path) -> None:
     _write(root / "docs" / "dsovs_readiness.md", "DSOVS readiness.\n")
     _write(root / "docs" / "evidence.md", "VMGA does not claim prompt-injection prevention, DLP, host compromise protection, browser/session isolation, compliance certification, or security of Hermes/OpenClaw internals.\n")
     _write(root / "docs" / "gmail_backend_options.md", "VMGA does not claim prompt-injection prevention, DLP, host compromise protection, browser/session isolation, compliance certification, or security of Hermes/OpenClaw internals.\n")
+    _write(root / "docs" / "action_catalog.md", """
+        # VMGA Action Catalog
+
+        <!-- BEGIN VMGA_ACTION_CATALOG -->
+        ```json
+        {
+          "schema_version": "vmga-action-catalog-v1",
+          "actions": [
+            {"action": "read", "class": "non_kinetic", "default_approval": "not_required", "baseline_denies": [], "risk_vectors": ["mailbox_read_access"]},
+            {"action": "summarize", "class": "non_kinetic", "default_approval": "not_required", "baseline_denies": [], "risk_vectors": ["mailbox_read_access"]},
+            {"action": "classify", "class": "non_kinetic", "default_approval": "not_required", "baseline_denies": [], "risk_vectors": ["mailbox_read_access"]},
+            {"action": "extract_entities", "class": "non_kinetic", "default_approval": "not_required", "baseline_denies": [], "risk_vectors": ["metadata_extraction"]},
+            {"action": "recommend_draft", "class": "non_kinetic", "default_approval": "not_required", "baseline_denies": [], "risk_vectors": ["suggested_response"]},
+            {"action": "create_draft", "class": "kinetic", "default_approval": "required", "baseline_denies": ["credential_transmission"], "risk_vectors": ["draft_creation"]},
+            {"action": "send", "class": "kinetic", "default_approval": "required", "baseline_denies": ["bulk_forwarding", "credential_transmission", "financial_instructions", "mfa_recovery_handling"], "risk_vectors": ["mailbox_send"]},
+            {"action": "forward", "class": "kinetic", "default_approval": "required", "baseline_denies": ["bulk_forwarding", "credential_transmission", "financial_instructions", "mfa_recovery_handling"], "risk_vectors": ["mailbox_forward"]},
+            {"action": "archive", "class": "kinetic", "default_approval": "required", "baseline_denies": [], "risk_vectors": ["mailbox_availability_change"]},
+            {"action": "delete", "class": "kinetic", "default_approval": "required", "baseline_denies": [], "risk_vectors": ["mailbox_destruction"]},
+            {"action": "apply_label", "class": "kinetic", "default_approval": "required", "baseline_denies": [], "risk_vectors": ["label_abuse"]},
+            {"action": "download_attachment", "class": "kinetic", "default_approval": "required", "baseline_denies": [], "risk_vectors": ["attachment_download"]},
+            {"action": "mark_read", "class": "kinetic", "default_approval": "required", "baseline_denies": [], "risk_vectors": ["mailbox_visibility_change"]},
+            {"action": "move", "class": "kinetic", "default_approval": "required", "baseline_denies": [], "risk_vectors": ["mailbox_availability_change"]}
+          ]
+        }
+        ```
+        <!-- END VMGA_ACTION_CATALOG -->
+    """)
     _write(root / "policies" / "observe_only.yaml", """
         vmga_version: "0.2.0"
         profile: observe_only
@@ -143,6 +170,18 @@ def test_release_check_reports_missing_required_file(tmp_path: Path) -> None:
 
     assert any(item.code == "required_file_missing" for item in report.errors)
     assert any(item.path and item.path.endswith("CONTRIBUTING.md") for item in report.errors)
+
+
+def test_release_check_flags_action_catalog_drift(tmp_path: Path) -> None:
+    _populate_safe_repo(tmp_path)
+    path = tmp_path / "docs" / "action_catalog.md"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace('"action": "send", "class": "kinetic"', '"action": "send", "class": "non_kinetic"'), encoding="utf-8")
+    checker = _load_release_checker()
+
+    report = checker.run_release_check(tmp_path)
+
+    assert any(item.code == "action_catalog_class_drift" for item in report.errors)
 
 
 def test_release_evidence_bundle_redacts_local_values(tmp_path: Path) -> None:
