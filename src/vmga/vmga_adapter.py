@@ -974,6 +974,17 @@ class VMGAGmailAdapter:
             return str(proposal.parameters["correlation_id"])
         return None
 
+    @staticmethod
+    def _parameters_correlation_id(parameters: Any) -> Optional[str]:
+        if not isinstance(parameters, dict):
+            return None
+        metadata = parameters.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("correlation_id"):
+            return str(metadata["correlation_id"])
+        if parameters.get("correlation_id"):
+            return str(parameters["correlation_id"])
+        return None
+
     def _log_state_saved(self, proposal: Optional[VMGAProposal], operation: str, correlation_id: Optional[str] = None) -> bool:
         event = {
             "event_type": "vmga_state_saved",
@@ -1264,6 +1275,8 @@ class VMGAGmailAdapter:
 
         # Log proposal - fail closed for kinetic if ledger fails
         log_success = self._log_proposal_received(proposal, status, decision, content_risk)
+        if log_success:
+            self._log_proposal_pressure_signals(proposal, status, decision, content_risk)
         if is_kinetic and self.ledger_required_for_kinetic and not log_success:
             # Trigger lockdown on ledger failure for kinetic actions
             self.lockdown_active = True
@@ -1552,12 +1565,7 @@ class VMGAGmailAdapter:
             return False, "Approval state changed before execution", "vmga_approval_binding_mismatch"
 
         approval.used = True
-        approval_correlation_id = None
-        metadata = approval.parameters.get("metadata")
-        if isinstance(metadata, dict) and metadata.get("correlation_id"):
-            approval_correlation_id = str(metadata["correlation_id"])
-        elif approval.parameters.get("correlation_id"):
-            approval_correlation_id = str(approval.parameters["correlation_id"])
+        approval_correlation_id = self._parameters_correlation_id(approval.parameters)
         if not self._save_state_with_fail_closed(True, proposal=None, operation="approval_used", correlation_id=approval_correlation_id):
             approval.used = False
             return False, "Failed to persist approval consumption", "vmga_state_persist_failed"
@@ -1582,10 +1590,12 @@ class VMGAGmailAdapter:
         # Verify approval with token and approver_id
         is_valid, reason, error_code = self._is_approval_valid(proposal_id, proposal_hash, approval.approver_id, approval_token)
         if not is_valid:
+            self._log_execution_pressure_signal(proposal_id, proposal_hash, approval, reason, error_code)
             return {"status": "DENY", "error": reason, "error_code": error_code, "rule_id": error_code}
 
         consumed, consume_reason, consume_code = self._consume_approval_before_execute(proposal_id, approval)
         if not consumed:
+            self._log_execution_pressure_signal(proposal_id, proposal_hash, approval, consume_reason, consume_code)
             return {"status": "DENY", "error": consume_reason, "error_code": consume_code, "rule_id": consume_code}
         approval = self.approvals[proposal_id]
         try:
@@ -1667,6 +1677,96 @@ class VMGAGmailAdapter:
         }
         return self._write_to_ledger(event)
 
+    @staticmethod
+    def _authority_pressure_present(proposal: VMGAProposal) -> bool:
+        text = " ".join(filter(None, [proposal.content or "", proposal.justification or ""])).lower()
+        authority_terms = (
+            "ceo", "cfo", "founder", "owner", "executive", "board", "general counsel",
+            "legal team", "attorney", "administrator", "admin", "manager", "director",
+            "on behalf of", "by order of",
+        )
+        return any(term in text for term in authority_terms)
+
+    def _log_proposal_pressure_signals(
+        self,
+        proposal: VMGAProposal,
+        status: str,
+        decision: Optional[PolicyDecision],
+        content_risk: ContentRisk,
+    ) -> None:
+        signals: list[tuple[str, Dict[str, Any]]] = []
+        denial_count = self.denial_counts.get(proposal.actor_id, 0)
+        if status in {"DENY", "LOCKDOWN"} and denial_count >= 2:
+            signals.append(("repeated_denial_escalation", {"denial_count": denial_count}))
+
+        pressure_flags = []
+        if content_risk.urgency_language:
+            pressure_flags.append("urgency_language")
+        if self._authority_pressure_present(proposal):
+            pressure_flags.append("authority_language")
+        if pressure_flags and status in {"DENY", "LOCKDOWN", "REVIEW_REQUIRED"}:
+            signals.append(("urgency_or_authority_pressure", {"pressure_flags": pressure_flags}))
+
+        for signal_type, details in signals:
+            event = {
+                "event_type": "vmga_pressure_signal",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "signal_type": signal_type,
+                "proposal_id": proposal.proposal_id,
+                "proposal_hash": proposal.compute_hash(),
+                "action": proposal.action.value,
+                "actor_id": proposal.actor_id,
+                "policy_state": status,
+                "vesta_rule_id": decision.rule_id if decision else None,
+                "vesta_reason": self._redact_evidence_text(decision.reason if decision else None),
+                "denial_count": denial_count,
+                "lockdown_threshold": self.vmga_policy.lockdown_threshold,
+                "risk_score": content_risk.score,
+                "risk_flags": content_risk.to_dict(),
+                "correlation_id": self._proposal_correlation_id(proposal),
+                "vmga_profile": self.profile,
+                **details,
+            }
+            self._write_to_ledger(event)
+
+    def _log_execution_pressure_signal(
+        self,
+        proposal_id: str,
+        supplied_proposal_hash: str,
+        approval: ApprovalRecord,
+        reason: str,
+        error_code: str,
+    ) -> None:
+        mutation_codes = {
+            "vmga_approval_hash_mismatch",
+            "vmga_approval_binding_mismatch",
+            "vmga_signature_payload_mismatch",
+        }
+        malformed_signature_payload = error_code == "vmga_signature_invalid" and not isinstance(approval.signature_payload, dict)
+        if error_code not in mutation_codes and not malformed_signature_payload:
+            return
+
+        correlation_id = self._parameters_correlation_id(approval.parameters)
+
+        event = {
+            "event_type": "vmga_pressure_signal",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "signal_type": "proposal_mutation_attempt",
+            "proposal_id": proposal_id,
+            "proposal_hash": approval.proposal_hash,
+            "supplied_proposal_hash": supplied_proposal_hash,
+            "action": approval.action,
+            "actor_id": approval.actor_id,
+            "approver_id": approval.approver_id,
+            "policy_state": "DENY",
+            "vesta_rule_id": error_code,
+            "vesta_reason": self._redact_evidence_text(reason),
+            "error_code": error_code,
+            "correlation_id": correlation_id,
+            "vmga_profile": self.profile,
+        }
+        self._write_to_ledger(event)
+
     def _log_proposal_approved(
         self,
         proposal: VMGAProposal,
@@ -1715,11 +1815,9 @@ class VMGAGmailAdapter:
         }
         approval = self.approvals.get(proposal_id)
         if approval:
-            metadata = approval.parameters.get("metadata")
-            if isinstance(metadata, dict) and metadata.get("correlation_id"):
-                event["correlation_id"] = str(metadata["correlation_id"])
-            elif approval.parameters.get("correlation_id"):
-                event["correlation_id"] = str(approval.parameters["correlation_id"])
+            correlation_id = self._parameters_correlation_id(approval.parameters)
+            if correlation_id:
+                event["correlation_id"] = correlation_id
         return self._write_to_ledger(event)
 
     def _log_lockdown_event(self, actor_id: str, proposal: VMGAProposal) -> bool:

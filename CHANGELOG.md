@@ -36,6 +36,8 @@ All notable changes to VMGA will be documented here.
   type-confused approval payloads, request bit-flips, stale HMAC windows, and
   signature payload mutation; malformed bindings now deny without executing the
   backend handler.
+- Added first-class `vmga_pressure_signal` evidence for repeated denials,
+  urgency or authority-language pressure, and proposal mutation attempts.
 
 ## v0.2.1 - 2026-06-10
 

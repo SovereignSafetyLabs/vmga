@@ -21,6 +21,9 @@ tagged release or live deployment without overstating VMGA's security boundary.
 - Any deployment-specific evidence required by `docs/deployment_runbook.md`
 - Correlation IDs for proposal, state, approval, and execution events when a
   request lifecycle is being traced.
+- `vmga_pressure_signal` events for multi-turn pressure patterns, including
+  repeated denials, urgency or authority-language pressure, and proposal
+  mutation attempts during execution.
 
 ## Claim Hygiene
 
@@ -45,6 +48,28 @@ boundary without cross-referencing hidden notes or oral context.
 - Redact in memory before writing shareable evidence. Do not write raw OAuth
   tokens, mailbox content, or message payloads to temporary files as an
   intermediate step.
+
+## Pressure Signals
+
+VMGA emits `vmga_pressure_signal` evidence events when policy-visible behavior
+shows escalation across a request lifecycle. These events are metadata-only:
+they carry proposal ids, proposal hashes, action, actor, policy state, rule id,
+denial counts, risk flags, correlation ids, and mutation hashes where relevant;
+they do not carry raw message bodies or approval tokens.
+
+Current pressure signal types:
+
+- `repeated_denial_escalation`: the same actor receives repeated denials before
+  or at lockdown.
+- `urgency_or_authority_pressure`: urgency language from content-risk analysis
+  or authority-language markers are present on a denied, locked down, or
+  review-required proposal.
+- `proposal_mutation_attempt`: execution is denied because the supplied
+  proposal hash or persisted approval binding no longer matches the approved
+  record.
+
+These events do not create a separate policy engine. They make the existing
+policy decision and integrity checks inspectable as multi-turn evidence.
 
 ## Release Review
 

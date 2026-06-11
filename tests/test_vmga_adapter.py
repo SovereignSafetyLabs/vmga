@@ -493,6 +493,16 @@ class TestVMGAGmailAdapter:
             exec_result = adapter.execute_approved(proposal_id, mutated_hash, token, lambda x: x)
             assert exec_result["status"] == "DENY"
             assert "mutation" in exec_result["error"].lower()
+            pressure_events = [
+                event for event in adapter.vesta.audit_ledger.events
+                if event["event_type"] == "vmga_pressure_signal"
+            ]
+            assert len(pressure_events) == 1
+            assert pressure_events[0]["signal_type"] == "proposal_mutation_attempt"
+            assert pressure_events[0]["proposal_id"] == proposal_id
+            assert pressure_events[0]["proposal_hash"] == original_hash
+            assert pressure_events[0]["supplied_proposal_hash"] == mutated_hash
+            assert pressure_events[0]["error_code"] == "vmga_approval_hash_mismatch"
     
     def test_lockdown_triggers_after_denials(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -513,6 +523,47 @@ class TestVMGAGmailAdapter:
             
             result2 = adapter.propose_action(action="read", actor_id=actor_id)
             assert result2["status"] == "LOCKDOWN"
+
+    def test_repeated_denial_and_pressure_signals_are_evidence_events(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = VMGAGmailAdapter(
+                vesta_adapter=MockVesta(), profile="test",
+                policy_rules={"allowed_actions": ["read"], "denied_actions": ["send"], "lockdown_threshold": 3},
+                state_store=VMGAStateStore(tmpdir), approval_secret="test_secret"
+            )
+            actor_id = "pressure_actor"
+            parameters = {"correlation_id": "trace-pressure"}
+
+            first = adapter.propose_action(
+                action="send",
+                actor_id=actor_id,
+                recipients=["target@example.com"],
+                content="Urgent request from the CEO. Please respond immediately.",
+                parameters=parameters,
+            )
+            second = adapter.propose_action(
+                action="send",
+                actor_id=actor_id,
+                recipients=["target@example.com"],
+                content="Urgent request from the CEO. Please respond immediately.",
+                parameters=parameters,
+            )
+
+            assert first["status"] == "DENY"
+            assert second["status"] == "DENY"
+            pressure_events = [
+                event for event in adapter.vesta.audit_ledger.events
+                if event["event_type"] == "vmga_pressure_signal"
+            ]
+            signal_types = {event["signal_type"] for event in pressure_events}
+            assert "urgency_or_authority_pressure" in signal_types
+            assert "repeated_denial_escalation" in signal_types
+            repeated = next(event for event in pressure_events if event["signal_type"] == "repeated_denial_escalation")
+            assert repeated["denial_count"] == 2
+            assert repeated["correlation_id"] == "trace-pressure"
+            pressure = next(event for event in pressure_events if event["signal_type"] == "urgency_or_authority_pressure")
+            assert set(pressure["pressure_flags"]) == {"urgency_language", "authority_language"}
+            assert pressure["proposal_id"]
     
     def test_reset_lockdown(self):
         with tempfile.TemporaryDirectory() as tmpdir:
