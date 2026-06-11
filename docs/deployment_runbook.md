@@ -85,10 +85,14 @@ cron, or plugin write paths outside VMGA. Include a durable reference with
 reviewable deployment evidence.
 
 The posture self-check reports configured intent and observable placement, not
-proof that every configured enforcement path has executed. Until the v0.3.0
-evidence-integrity and approval-signature implementations ship, `hmac_chain`
-evidence and `signature` approval modes are design gates rather than active
-hard-enforcement proof.
+proof that every configured enforcement path has executed. `hmac_chain`
+evidence remains a design gate until the evidence-integrity implementation
+ships. `signature` approval mode verifies Ed25519 detached approvals with
+broker-held public keys only; it supports hard approval-enforcement claims only
+when the approver private key is isolated from both broker and agent authority
+domains. Residuals: private-key compromise, operator signing-device compromise,
+and intentional operator approval are outside VMGA's approval-signature
+boundary. HMAC approval mode remains broker-forgeable and advisory/dev.
 
 If `/health` reports lockdown, inspect evidence first, then reset only through
 an operator-controlled maintenance path. `reset_lockdown` is an in-process

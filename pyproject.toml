@@ -16,6 +16,7 @@ classifiers = [
   "License :: OSI Approved :: MIT License"
 ]
 dependencies = [
+  "cryptography>=42.0",
   "PyYAML>=6.0"
 ]
 
@@ -30,6 +31,7 @@ gogcli = []
 [project.scripts]
 vmga-verify-evidence = "vmga.cli:verify_evidence_main"
 vmga-approval-token = "vmga.cli:approval_token_main"
+vmga-approval-sign = "vmga.cli:approval_sign_main"
 vmga-operator = "vmga.cli:operator_main"
 vmga-broker = "vmga.cli:broker_main"
 vmga-live-smoke = "vmga.live_smoke:main"

@@ -97,7 +97,12 @@ class VMGABroker:
             return self.adapter.approve_proposal(
                 proposal_id=payload["proposal_id"],
                 approver_id=payload["approver_id"],
-                approval_token=payload["approval_token"],
+                approval_token=payload.get("approval_token", ""),
+                signature=payload.get("signature", ""),
+                time_window=payload.get("time_window", ""),
+                approval_nonce=payload.get("approval_nonce", ""),
+                key_id=payload.get("key_id", ""),
+                signature_version=payload.get("signature_version", "vmga-approval-ed25519-v1"),
             )
         except KeyError as exc:
             return {"status": "DENY", "error_code": "vmga_broker_bad_request", "error": f"missing {exc.args[0]}"}

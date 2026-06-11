@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import os
+import base64
 import secrets
 import tempfile
 import threading
@@ -24,6 +25,10 @@ from datetime import datetime, timezone, timedelta
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.serialization import load_ssh_public_key
 
 from .models import ExecutionRequestEnvelope, PolicyDecision
 from .redaction import redact_text
@@ -43,7 +48,7 @@ class GmailAction(Enum):
     CLASSIFY = "classify"
     EXTRACT_ENTITIES = "extract_entities"
     RECOMMEND_DRAFT = "recommend_draft"  # Returns text only, no creation
-    
+
     # Kinetic
     CREATE_DRAFT = "create_draft"
     SEND = "send"
@@ -54,7 +59,7 @@ class GmailAction(Enum):
     DOWNLOAD_ATTACHMENT = "download_attachment"
     MARK_READ = "mark_read"
     MOVE = "move"
-    
+
     @classmethod
     def from_string(cls, action_str: str) -> Optional["GmailAction"]:
         """Parse action string to enum, returning None for invalid actions."""
@@ -67,7 +72,7 @@ class GmailAction(Enum):
 @dataclass(frozen=True)
 class VMGAProposal:
     """Canonical proposal structure for Gmail actions.
-    
+
     Immutable and deterministic for hash-based integrity checks.
     """
     proposal_id: str
@@ -81,7 +86,7 @@ class VMGAProposal:
     parameters: Dict[str, Any] = field(default_factory=dict)
     justification: str = ""
     requested_at: str = ""
-    
+
     def canonical_json(self) -> str:
         """Deterministic serialization for hashing."""
         data = {
@@ -98,11 +103,11 @@ class VMGAProposal:
             "requested_at": self.requested_at,
         }
         return json.dumps(data, sort_keys=True, separators=(',', ':'))
-    
+
     def compute_hash(self) -> str:
         """SHA-256 hash of canonical serialization."""
         return f"sha256:{hashlib.sha256(self.canonical_json().encode()).hexdigest()}"
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -118,7 +123,7 @@ class VMGAProposal:
             "justification": self.justification,
             "requested_at": self.requested_at,
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "VMGAProposal":
         """Create from dictionary (e.g., loaded from state store)."""
@@ -150,7 +155,7 @@ class ContentRisk:
     legal_threat: bool = False
     mfa_recovery: bool = False
     bulk_operation: bool = False
-    
+
     @property
     def score(self) -> int:
         return sum([
@@ -158,7 +163,7 @@ class ContentRisk:
             self.external_recipient, self.unknown_sender, self.suspicious_attachment,
             self.secrecy_instructions, self.legal_threat, self.mfa_recovery, self.bulk_operation,
         ])
-    
+
     def to_dict(self) -> Dict[str, bool]:
         return {
             "payment_mention": self.payment_mention, "urgency_language": self.urgency_language,
@@ -188,6 +193,12 @@ class ApprovalRecord:
     content: Optional[str] = None
     parameters: Dict[str, Any] = field(default_factory=dict)
     binding_hash: str = ""
+    approval_auth: str = "hmac"
+    signature_payload: Optional[Dict[str, Any]] = None
+    signature: str = ""
+    key_id: str = ""
+    signature_version: str = ""
+    approval_nonce: str = ""
 
     @staticmethod
     def compute_binding_hash(
@@ -266,7 +277,7 @@ class ApprovalRecord:
             parameters=self.parameters,
             expires_at=self.expires_at,
         )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "proposal_id": self.proposal_id, "proposal_hash": self.proposal_hash,
@@ -278,8 +289,14 @@ class ApprovalRecord:
             "recipients": self.recipients, "attachment_ids": self.attachment_ids,
             "content": self.content, "parameters": self.parameters,
             "binding_hash": self.binding_hash,
+            "approval_auth": self.approval_auth,
+            "signature_payload": self.signature_payload,
+            "signature": self.signature,
+            "key_id": self.key_id,
+            "signature_version": self.signature_version,
+            "approval_nonce": self.approval_nonce,
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ApprovalRecord":
         return cls(
@@ -292,6 +309,12 @@ class ApprovalRecord:
             recipients=data.get("recipients", []), attachment_ids=data.get("attachment_ids", []),
             content=data.get("content"), parameters=data.get("parameters", {}),
             binding_hash=data.get("binding_hash", ""),
+            approval_auth=data.get("approval_auth", "hmac"),
+            signature_payload=data.get("signature_payload"),
+            signature=data.get("signature", ""),
+            key_id=data.get("key_id", ""),
+            signature_version=data.get("signature_version", ""),
+            approval_nonce=data.get("approval_nonce", ""),
         )
 
     def to_execution_payload(self) -> Dict[str, Any]:
@@ -330,22 +353,22 @@ class VMGAPolicy:
         "draft_policy": {"max_length", "require_justification", "allow_external_recipients"},
     }
     VALID_RISK_INDICATORS = set(ContentRisk().__dict__.keys())
-    
+
     def __init__(self, profile: str, rules: Dict[str, Any]):
         self.profile = profile
         self.raw_rules = rules
         self.validate_rules(rules)
-        
+
         domain_policy = rules.get("domain_policy", {})
         self.internal_domains: Set[str] = set(
             domain_policy.get("internal_domains", rules.get("internal_domains", ["company.com"]))
         )
         self.external_domain_deny = domain_policy.get("external_domain_deny", rules.get("external_domain_deny", True))
         self.log_external_senders = domain_policy.get("log_external_senders", rules.get("log_external_senders", True))
-        
+
         self.allowed_actions: Set[str] = set(rules.get("allowed_actions", []))
         self.denied_actions: Set[str] = set(rules.get("denied_actions", []))
-        
+
         approval_required = rules.get("approval_required", {})
         self.approval_required_per_action: Dict[str, bool] = {
             "create_draft": approval_required.get("create_draft", True),
@@ -355,34 +378,34 @@ class VMGAPolicy:
             "forward": approval_required.get("forward", True),
             "delete": approval_required.get("delete", True),
         }
-        
+
         kinetic_policy = rules.get("kinetic_policy", {})
         self.kinetic_requires_approval = kinetic_policy.get("requires_approval", rules.get("kinetic_requires_approval", True))
-        
+
         draft_policy = rules.get("draft_policy", {})
         self.draft_max_length = draft_policy.get("max_length", 5000)
         self.draft_require_justification = draft_policy.get("require_justification", True)
         self.draft_allow_external_recipients = draft_policy.get("allow_external_recipients", False)
-        
+
         self.label_allowlist: Set[str] = set(rules.get("label_allowlist", []))
-        
+
         approval_workflow = rules.get("approval_workflow", {})
         self.approval_expiry_seconds = self._parse_duration(approval_workflow.get("expiration", "3600"))
         self.approver_allowlist: Set[str] = set(approval_workflow.get("approver_allowlist", []))
-        
+
         content_analysis = rules.get("content_analysis", {})
         self.content_analysis_enabled = content_analysis.get("enabled", rules.get("content_analysis_enabled", True))
         self.enforce_risk_threshold = content_analysis.get("enforce_risk_threshold", rules.get("enforce_risk_threshold", False))
         self.max_risk_score_auto_allow = content_analysis.get("max_risk_score_auto_allow", rules.get("max_risk_score_auto_allow", 0))
-        
+
         self.high_risk_indicators: Set[str] = set(rules.get("high_risk_indicators", []))
-        
+
         baseline_denies = rules.get("baseline_denies", {})
         self.baseline_financial = baseline_denies.get("financial_instructions", True)
         self.baseline_credential = baseline_denies.get("credential_transmission", True)
         self.baseline_mfa = baseline_denies.get("mfa_recovery_handling", True)
         self.baseline_bulk = baseline_denies.get("bulk_forwarding", True)
-        
+
         self.lockdown_threshold = rules.get("lockdown_threshold", 5)
 
     @classmethod
@@ -428,7 +451,7 @@ class VMGAPolicy:
     @staticmethod
     def _decision(allowed: bool, reason: str, rule_id: str, error_code: Optional[str] = None) -> PolicyDecision:
         return PolicyDecision(allowed=allowed, reason=reason, rule_id=rule_id, error_code=error_code or rule_id)
-    
+
     def _parse_duration(self, value: Any) -> int:
         if isinstance(value, int):
             return value
@@ -439,16 +462,16 @@ class VMGAPolicy:
                 return int(value[:-1]) * 60
             return int(value)
         return 3600
-    
+
     def classify_action(self, action: GmailAction) -> ActionClass:
-        non_kinetic = {GmailAction.READ, GmailAction.SUMMARIZE, GmailAction.CLASSIFY, 
+        non_kinetic = {GmailAction.READ, GmailAction.SUMMARIZE, GmailAction.CLASSIFY,
                       GmailAction.EXTRACT_ENTITIES, GmailAction.RECOMMEND_DRAFT}
         return ActionClass.NON_KINETIC if action in non_kinetic else ActionClass.KINETIC
-    
+
     def evaluate_content_risk(self, content: str, sender: str, recipients: List[str]) -> ContentRisk:
         content_lower = content.lower() if content else ""
         risk = ContentRisk()
-        
+
         risk.payment_mention = any(term in content_lower for term in [
             "payment", "invoice", "wire transfer", "bank account", "routing number",
             "swift", "iban", "sort code", "ach", "deposit"
@@ -473,111 +496,112 @@ class VMGAPolicy:
             "lawsuit", "legal action", "attorney", "compliance violation",
             "regulatory", "subpoena", "litigation", "gdpr violation"
         ])
-        
+
         recipient_count = len(recipients) if recipients else 0
         risk.bulk_operation = recipient_count > 10
-        
+
         sender_domain = sender.split("@")[-1] if "@" in sender else ""
         risk.unknown_sender = sender_domain not in self.internal_domains
-        
+
         for recipient in recipients:
             recip_domain = recipient.split("@")[-1] if "@" in recipient else ""
             if recip_domain not in self.internal_domains:
                 risk.external_recipient = True
                 break
-        
+
         return risk
-    
+
     def evaluate(self, proposal: VMGAProposal, content_risk: ContentRisk) -> PolicyDecision:
         action_class = self.classify_action(proposal.action)
         action_str = proposal.action.value
-        
+
         if self.allowed_actions and action_str not in self.allowed_actions:
             return self._decision(False, f"Action '{action_str}' not in allowlist", "vmga_not_allowed")
-        
+
         if action_str in self.denied_actions:
             return self._decision(False, f"Action '{action_str}' is explicitly denied", "vmga_explicit_deny")
-        
+
         if self.baseline_credential and content_risk.credential_request:
             if proposal.action in [GmailAction.SEND, GmailAction.FORWARD, GmailAction.CREATE_DRAFT]:
                 return self._decision(False, "Credential-related content denied by baseline policy", "vmga_baseline_credential_deny")
-        
+
         if self.baseline_mfa and content_risk.mfa_recovery:
             if proposal.action in [GmailAction.SEND, GmailAction.FORWARD]:
                 return self._decision(False, "MFA/recovery content denied by baseline policy", "vmga_baseline_mfa_deny")
-        
+
         if self.baseline_bulk and content_risk.bulk_operation:
             if proposal.action in [GmailAction.SEND, GmailAction.FORWARD]:
                 return self._decision(False, "Bulk operation denied by baseline policy", "vmga_baseline_bulk_deny")
-        
+
         if self.baseline_financial and content_risk.payment_mention:
             if proposal.action in [GmailAction.SEND, GmailAction.FORWARD]:
                 return self._decision(False, "Payment instructions denied by baseline policy", "vmga_baseline_financial_deny")
-        
+
         if action_class == ActionClass.NON_KINETIC:
             return self._decision(True, "Non-kinetic action within policy", "vmga_non_kinetic_allow")
-        
+
         if action_class == ActionClass.KINETIC:
             requires_approval = self.approval_required_per_action.get(action_str, self.kinetic_requires_approval)
-            
+
             if proposal.action == GmailAction.CREATE_DRAFT:
                 content = proposal.content or ""
                 if len(content) > self.draft_max_length:
                     return self._decision(False, f"Draft exceeds maximum length ({self.draft_max_length} chars)", "vmga_draft_length_exceeded")
-                
+
                 if not self.draft_allow_external_recipients and content_risk.external_recipient:
                     return self._decision(False, "Draft creation with external recipients not allowed", "vmga_draft_external_recipient_deny")
-                
+
                 if requires_approval and self.draft_require_justification and not proposal.justification:
                     return self._decision(False, "Draft creation requires justification", "vmga_draft_justification_required")
-            
+
             if content_risk.external_recipient and self.external_domain_deny:
                 if proposal.action in [GmailAction.SEND, GmailAction.FORWARD]:
                     return self._decision(False, "External recipients denied for send/forward actions", "vmga_external_recipient_deny")
-            
+
             high_risk_present = any(getattr(content_risk, indicator, False) for indicator in self.high_risk_indicators)
-            
+
             if high_risk_present and requires_approval:
                 return self._decision(False, "High-risk content indicators present", "vmga_high_risk_review_required")
-            
+
             if requires_approval:
                 return self._decision(False, "Kinetic action requires approval", "vmga_kinetic_approval_required")
-            
+
             return self._decision(True, "Kinetic action auto-allowed", "vmga_kinetic_auto_allow")
-        
+
         return self._decision(False, "Policy evaluation requires review", "vmga_review_required")
 
 
 class VMGAStateStore:
     """Durable state storage with atomic writes and permission hardening."""
-    
+
     def __init__(self, storage_path: Optional[str] = None):
         if storage_path is None:
             storage_path = os.path.expanduser("~/.vmga_state")
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True, mode=0o700)  # Owner-only
-        
+
         self.pending_path = self.storage_path / "pending_proposals.json"
         self.approvals_path = self.storage_path / "approvals.json"
         self._set_permissions()
-    
+
     def _set_permissions(self) -> None:
         """Ensure files have restrictive permissions (0o600)."""
         try:
             # Set directory to 0o700 (owner only)
             os.chmod(self.storage_path, 0o700)
-            
+
             # Set existing files to 0o600
             rate_limit_path = self.storage_path / "rate_limit_state.json"
-            for path in [self.pending_path, self.approvals_path, rate_limit_path]:
+            nonce_path = self.storage_path / "approval_nonces.json"
+            for path in [self.pending_path, self.approvals_path, rate_limit_path, nonce_path]:
                 if path.exists():
                     os.chmod(path, 0o600)
         except OSError:
             pass  # May not have permission to change
-    
+
     def save_rate_limit_state(self, failed_attempts: Dict[str, Dict[str, Any]]) -> None:
         """Persist rate limiting state to disk.
-        
+
         Format: {attempt_key: {count, first_attempt, last_attempt}}
         """
         # Convert to serializable format
@@ -590,10 +614,10 @@ class VMGAStateStore:
             }
         rate_limit_path = self.storage_path / "rate_limit_state.json"
         self._atomic_write_json(rate_limit_path, data)
-    
+
     def load_rate_limit_state(self, lockout_duration_seconds: int = 3600) -> Dict[str, Dict[str, Any]]:
         """Load rate limiting state, filtering expired lockouts.
-        
+
         Returns: {attempt_key: {count, first_attempt}} for active lockouts only.
         """
         rate_limit_path = self.storage_path / "rate_limit_state.json"
@@ -602,7 +626,7 @@ class VMGAStateStore:
         try:
             with open(rate_limit_path, 'r') as f:
                 data = json.load(f)
-            
+
             now = datetime.now(timezone.utc)
             active = {}
             for key, info in data.items():
@@ -620,7 +644,30 @@ class VMGAStateStore:
             return active
         except (json.JSONDecodeError, KeyError, OSError):
             return {}
-    
+
+    def save_approval_nonce_state(self, used_nonces: Dict[str, str]) -> None:
+        nonce_path = self.storage_path / "approval_nonces.json"
+        self._atomic_write_json(nonce_path, used_nonces)
+
+    def load_approval_nonce_state(self, validity_horizon_seconds: int = 3900) -> Dict[str, str]:
+        nonce_path = self.storage_path / "approval_nonces.json"
+        if not nonce_path.exists():
+            return {}
+        try:
+            data = json.loads(nonce_path.read_text(encoding="utf-8"))
+            now = datetime.now(timezone.utc)
+            active = {}
+            for nonce_key, used_at in data.items():
+                try:
+                    used_dt = datetime.fromisoformat(used_at)
+                    if (now - used_dt).total_seconds() <= validity_horizon_seconds:
+                        active[str(nonce_key)] = str(used_at)
+                except (TypeError, ValueError):
+                    pass
+            return active
+        except (json.JSONDecodeError, OSError):
+            return {}
+
     def _atomic_write_json(self, path: Path, data: Dict[str, Any]) -> None:
         """Write JSON atomically using temp file + rename + fsync."""
         # Write to temp file in same directory
@@ -630,20 +677,20 @@ class VMGAStateStore:
                 json.dump(data, f, indent=2)
                 f.flush()
                 os.fsync(f.fileno())
-            
+
             # Set restrictive permissions before making visible
             os.chmod(temp_path, 0o600)
-            
+
             # Atomic rename
             os.replace(temp_path, path)
-            
+
             # Sync directory to ensure rename is durable
             dir_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
                 os.fsync(dir_fd)
             finally:
                 os.close(dir_fd)
-                
+
         except Exception:
             # Clean up temp file on failure
             try:
@@ -651,7 +698,7 @@ class VMGAStateStore:
             except OSError:
                 pass
             raise
-    
+
     def save_pending_proposals(self, proposals: Dict[str, VMGAProposal], proposal_ttl_seconds: int = 86400) -> None:
         """Persist pending proposals to disk with TTL filtering."""
         now = datetime.now(timezone.utc)
@@ -666,7 +713,7 @@ class VMGAStateStore:
                 # Invalid timestamp, keep it (conservative)
                 valid_proposals[pid] = prop.to_dict()
         self._atomic_write_json(self.pending_path, valid_proposals)
-    
+
     def load_pending_proposals(self, proposal_ttl_seconds: int = 86400) -> Dict[str, VMGAProposal]:
         """Load pending proposals from disk with TTL filtering."""
         if not self.pending_path.exists():
@@ -674,7 +721,7 @@ class VMGAStateStore:
         try:
             with open(self.pending_path, 'r') as f:
                 data = json.load(f)
-            
+
             now = datetime.now(timezone.utc)
             valid = {}
             for pid, prop_data in data.items():
@@ -688,12 +735,12 @@ class VMGAStateStore:
             return valid
         except (json.JSONDecodeError, KeyError, OSError):
             return {}
-    
+
     def save_approvals(self, approvals: Dict[str, ApprovalRecord]) -> None:
         """Persist approvals to disk."""
         data = {pid: app.to_dict() for pid, app in approvals.items()}
         self._atomic_write_json(self.approvals_path, data)
-    
+
     def load_approvals(self) -> Dict[str, ApprovalRecord]:
         """Load approvals from disk."""
         if not self.approvals_path.exists():
@@ -704,7 +751,7 @@ class VMGAStateStore:
             return {pid: ApprovalRecord.from_dict(app_data) for pid, app_data in data.items()}
         except (json.JSONDecodeError, KeyError, OSError):
             return {}
-    
+
     def save_lockdown_state(self, lockdown_active: bool, denial_counts: Dict[str, int]) -> None:
         """Persist lockdown state and denial counts."""
         data = {
@@ -714,7 +761,7 @@ class VMGAStateStore:
         }
         lockdown_path = self.storage_path / "lockdown_state.json"
         self._atomic_write_json(lockdown_path, data)
-    
+
     def load_lockdown_state(self) -> Tuple[bool, Dict[str, int], bool]:
         """Load lockdown state and denial counts. Returns (lockdown_active, denial_counts, corrupted)."""
         lockdown_path = self.storage_path / "lockdown_state.json"
@@ -726,13 +773,13 @@ class VMGAStateStore:
             return data.get("lockdown_active", False), data.get("denial_counts", {}), False
         except (json.JSONDecodeError, KeyError, OSError):
             return False, {}, True  # Signal corruption
-    
+
     def load_all_state(self, proposal_ttl_seconds: int = 86400, fail_closed: bool = False, max_state_size_bytes: int = 10_000_000) -> Dict[str, Any]:
         """Load all state atomically with optional fail-closed semantics and size limits.
-        
+
         If fail_closed=True and any state file is corrupted, returns empty state
         and triggers lockdown indicators.
-        
+
         max_state_size_bytes: Maximum total state size (default 10MB) to prevent DoS.
         """
         # Check total state file sizes
@@ -740,7 +787,7 @@ class VMGAStateStore:
         for path in [self.pending_path, self.approvals_path, self.storage_path / "lockdown_state.json"]:
             if path.exists():
                 total_size += path.stat().st_size
-        
+
         if total_size > max_state_size_bytes:
             # State files too large - possible DoS attack
             import sys
@@ -753,28 +800,28 @@ class VMGAStateStore:
                     "denial_counts": {},
                     "corrupted": True,
                 }
-        
+
         # Check for corruption in any file
         lockdown_active, denial_counts, lockdown_corrupted = self.load_lockdown_state()
-        
+
         # Try to load other state (but catch corruption)
         pending_corrupted = False
         approvals_corrupted = False
-        
+
         try:
             pending = self.load_pending_proposals(proposal_ttl_seconds)
         except Exception:
             pending = {}
             pending_corrupted = True
-        
+
         try:
             approvals = self.load_approvals()
         except Exception:
             approvals = {}
             approvals_corrupted = True
-        
+
         any_corrupted = lockdown_corrupted or pending_corrupted or approvals_corrupted
-        
+
         if fail_closed and any_corrupted:
             # Fail closed: return empty state with lockdown indicator
             return {
@@ -784,7 +831,7 @@ class VMGAStateStore:
                 "denial_counts": {},
                 "corrupted": True,
             }
-        
+
         # Normal load (returns what we can, with lockdown from file if present)
         return {
             "pending_proposals": pending,
@@ -797,7 +844,7 @@ class VMGAStateStore:
 
 class VMGAGmailAdapter:
     """VMGA adapter with secure approval authentication and fail-closed semantics."""
-    
+
     def __init__(
         self,
         vesta_adapter: Any,
@@ -807,6 +854,8 @@ class VMGAGmailAdapter:
         approval_secret: Optional[str] = None,
         strict_mode: bool = True,  # Default to secure mode
         fail_closed_on_corrupted_state: bool = False,  # Set True for production
+        approval_auth: str = "hmac",
+        approval_public_keys: Optional[Dict[str, List[Dict[str, str]]]] = None,
     ):
         self.vesta = vesta_adapter
         self.profile = profile
@@ -816,7 +865,11 @@ class VMGAGmailAdapter:
         self.ledger_required_for_kinetic = policy_rules.get("ledger_required_for_kinetic", True)
         self.proposal_ttl_seconds = policy_rules.get("proposal_ttl_seconds", 86400)  # Default 24h
         self.fail_closed_on_corrupted_state = fail_closed_on_corrupted_state
-        
+        if approval_auth not in {"hmac", "signature"}:
+            raise ValueError("approval_auth must be 'hmac' or 'signature'")
+        self.approval_auth = approval_auth
+        self.approval_public_keys = approval_public_keys or {}
+
         # Load all state atomically (with optional fail-closed semantics)
         state = self.state_store.load_all_state(
             proposal_ttl_seconds=self.proposal_ttl_seconds,
@@ -826,32 +879,41 @@ class VMGAGmailAdapter:
         self.approvals: Dict[str, ApprovalRecord] = state["approvals"]
         self.lockdown_active: bool = state["lockdown_active"]
         self.denial_counts: Dict[str, int] = state["denial_counts"]
-        
+
         # If state was corrupted and we failed closed, log it
         if state.get("corrupted") and fail_closed_on_corrupted_state:
             import sys
             print("[VMGA CRITICAL] State corruption detected - LOCKDOWN activated (fail-closed)", file=sys.stderr)
-        
+
         # Rate limiting for bad token attempts: {proposal_id: {count, first_attempt}}
         self._failed_token_attempts: Dict[str, Dict[str, Any]] = self.state_store.load_rate_limit_state()
+        self._used_approval_nonces: Dict[str, str] = self.state_store.load_approval_nonce_state(
+            self.vmga_policy.approval_expiry_seconds + 300
+        )
         self._max_token_attempts = 5
         self._lockout_duration_seconds = 3600  # 1 hour
         self._state_lock = threading.RLock()
-        
+
         # Load or generate approval secret
         if approval_secret is None:
             approval_secret = os.environ.get("VMGA_APPROVAL_SECRET")
-        if approval_secret is None and strict_mode:
+        if self.approval_auth == "hmac" and approval_secret is None and strict_mode:
             raise ValueError("VMGA_APPROVAL_SECRET must be set in strict_mode, or provide approval_secret")
-        elif approval_secret is None:
+        elif self.approval_auth == "hmac" and approval_secret is None:
             approval_secret = secrets.token_hex(32)  # Dev mode only
         self.approval_secret = approval_secret.encode() if approval_secret else None
-    
+        self.signature_readiness = (
+            {"state": "cannot_verify", "reason": "missing_approval_public_keys"}
+            if self.approval_auth == "signature" and not self.approval_public_keys
+            else {"state": "verified_intact", "reason": "configured"}
+        )
+
     def _save_state(self) -> None:
         """Save all state including lockdown and TTL-filtered proposals."""
         self.state_store.save_pending_proposals(self.pending_proposals, self.proposal_ttl_seconds)
         self.state_store.save_approvals(self.approvals)
         self.state_store.save_lockdown_state(self.lockdown_active, self.denial_counts)
+        self.state_store.save_approval_nonce_state(self._used_approval_nonces)
 
     @staticmethod
     def _proposal_correlation_id(proposal: Optional[VMGAProposal]) -> Optional[str]:
@@ -876,7 +938,7 @@ class VMGAGmailAdapter:
             "vmga_profile": self.profile,
         }
         return self._write_to_ledger(event)
-    
+
     @staticmethod
     def approval_time_window(now: Optional[datetime] = None, *, window_seconds: int = 300) -> str:
         """Return the short-lived approval-token time window."""
@@ -887,30 +949,143 @@ class VMGAGmailAdapter:
 
     def compute_approval_token(self, proposal_id: str, proposal_hash: str, approver_id: str, time_window: Optional[str] = None) -> str:
         """Compute HMAC token for approval (for out-of-band approval service).
-        
+
         Includes time-window binding to prevent indefinite token replay.
         The time_window defaults to a five-minute UTC window.
-        
+
         This method is for the external approval service to compute tokens.
         The adapter does NOT self-generate tokens in approve_proposal().
         """
         if self.approval_secret is None:
             raise RuntimeError("No approval_secret configured")
-        
+
         if time_window is None:
             time_window = self.approval_time_window()
-        
+
         message = f"{proposal_id}:{proposal_hash}:{approver_id}:{time_window}"
         return hmac.new(self.approval_secret, message.encode(), hashlib.sha256).hexdigest()
-    
+
+    @staticmethod
+    def canonical_approval_signature_payload(payload: Dict[str, Any]) -> bytes:
+        required = {
+            "proposal_id",
+            "proposal_hash",
+            "approver_id",
+            "time_window",
+            "approval_nonce",
+            "key_id",
+            "signature_version",
+        }
+        if set(payload) != required:
+            raise ValueError("approval signature payload has unexpected fields")
+        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    def approval_signature_payload(
+        self,
+        proposal_id: str,
+        approver_id: str,
+        *,
+        time_window: str,
+        approval_nonce: str,
+        key_id: str,
+        signature_version: str = "vmga-approval-ed25519-v1",
+    ) -> Dict[str, Any]:
+        proposal = self.pending_proposals[proposal_id]
+        return {
+            "proposal_id": proposal_id,
+            "proposal_hash": proposal.compute_hash(),
+            "approver_id": approver_id,
+            "time_window": time_window,
+            "approval_nonce": approval_nonce,
+            "key_id": key_id,
+            "signature_version": signature_version,
+        }
+
+    @staticmethod
+    def _nonce_key(approver_id: str, key_id: str, approval_nonce: str) -> str:
+        return f"{approver_id}:{key_id}:{approval_nonce}"
+
+    def _prune_approval_nonces(self, now: datetime) -> None:
+        horizon = self.vmga_policy.approval_expiry_seconds + 300
+        active: Dict[str, str] = {}
+        for nonce_key, used_at in self._used_approval_nonces.items():
+            try:
+                if (now - datetime.fromisoformat(used_at)).total_seconds() <= horizon:
+                    active[nonce_key] = used_at
+            except ValueError:
+                pass
+        self._used_approval_nonces = active
+
+    def _approval_key_entry(self, approver_id: str, key_id: str) -> Optional[Dict[str, str]]:
+        for entry in self.approval_public_keys.get(approver_id, []):
+            if entry.get("key_id") == key_id:
+                return entry
+        return None
+
+    @staticmethod
+    def _load_ed25519_public_key(public_key: str) -> Ed25519PublicKey:
+        if public_key.startswith("ssh-ed25519 "):
+            loaded = load_ssh_public_key(public_key.encode("utf-8"))
+            if not isinstance(loaded, Ed25519PublicKey):
+                raise ValueError("public key is not Ed25519")
+            return loaded
+        return Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key))
+
+    def _verify_approval_signature(
+        self,
+        proposal_id: str,
+        approver_id: str,
+        *,
+        signature: str,
+        time_window: str,
+        approval_nonce: str,
+        key_id: str,
+        signature_version: str,
+    ) -> Tuple[bool, str, str, Optional[Dict[str, Any]]]:
+        now = datetime.now(timezone.utc)
+        self._prune_approval_nonces(now)
+        if not self.approval_public_keys:
+            return False, "Missing approval public keys in signature mode", "vmga_signature_keyring_missing", None
+        entry = self._approval_key_entry(approver_id, key_id)
+        if entry is None:
+            return False, "Unknown approval key", "vmga_signature_key_unknown", None
+        if entry.get("status", "active") != "active":
+            return False, "Approval key is not active", "vmga_signature_key_inactive", None
+        if entry.get("algorithm") != "ed25519" or signature_version != "vmga-approval-ed25519-v1":
+            return False, "Approval signature algorithm mismatch", "vmga_signature_algorithm_mismatch", None
+        if not approval_nonce or len(approval_nonce) < 16:
+            return False, "Approval nonce is missing or too short", "vmga_signature_nonce_invalid", None
+        if self._nonce_key(approver_id, key_id, approval_nonce) in self._used_approval_nonces:
+            return False, "Approval nonce replay detected", "vmga_signature_nonce_replay", None
+        try:
+            window_dt = datetime.strptime(time_window, "%Y-%m-%d-%H-%M").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return False, "Invalid approval time window", "vmga_signature_window_invalid", None
+        if abs((now - window_dt).total_seconds()) > 600:
+            return False, "Approval time window expired", "vmga_signature_expired", None
+        try:
+            payload = self.approval_signature_payload(
+                proposal_id,
+                approver_id,
+                time_window=time_window,
+                approval_nonce=approval_nonce,
+                key_id=key_id,
+                signature_version=signature_version,
+            )
+            public_key = self._load_ed25519_public_key(entry["public_key"])
+            public_key.verify(base64.b64decode(signature), self.canonical_approval_signature_payload(payload))
+        except (KeyError, ValueError, TypeError, InvalidSignature):
+            return False, "Invalid approval signature", "vmga_signature_invalid", None
+        return True, "Valid", "vmga_signature_valid", payload
+
     def _verify_approval_token(self, proposal_id: str, proposal_hash: str, approver_id: str, token: str) -> bool:
         """Verify HMAC token matches expected value for short-lived windows.
-        
+
         Allows for clock skew by checking current and previous five-minute windows.
         """
         if self.approval_secret is None:
             return False  # Cannot verify without secret
-        
+
         now = datetime.now(timezone.utc)
 
         for candidate in (now, now - timedelta(minutes=5)):
@@ -918,9 +1093,9 @@ class VMGAGmailAdapter:
             expected = self.compute_approval_token(proposal_id, proposal_hash, approver_id, window)
             if hmac.compare_digest(expected, token):
                 return True
-        
+
         return False
-    
+
     def propose_action(
         self, action: str, actor_id: str, thread_id: Optional[str] = None,
         message_ids: Optional[List[str]] = None, content: Optional[str] = None,
@@ -957,7 +1132,7 @@ class VMGAGmailAdapter:
             }
             self._log_proposal_received(None, result["status"], None, ContentRisk(), result["rule_id"], result["reason"])
             return result
-        
+
         if self.lockdown_active:
             result = {
                 "status": "LOCKDOWN", "proposal_id": None, "proposal_hash": None,
@@ -968,7 +1143,7 @@ class VMGAGmailAdapter:
             }
             self._log_proposal_received(None, result["status"], None, ContentRisk(), result["rule_id"], result["reason"])
             return result
-        
+
         now = datetime.now(timezone.utc)
         proposal = VMGAProposal(
             proposal_id=f"vmga_{hashlib.sha256(f'{actor_id}{action}{thread_id}{now.isoformat()}'.encode()).hexdigest()[:16]}",
@@ -977,12 +1152,12 @@ class VMGAGmailAdapter:
             attachment_ids=attachment_ids or [], parameters=parameters or {}, justification=justification,
             requested_at=now.isoformat(),
         )
-        
+
         content_risk = self.vmga_policy.evaluate_content_risk(content or "", sender, recipients or [])
         decision = self.vmga_policy.evaluate(proposal, content_risk)
-        
+
         is_kinetic = self.vmga_policy.classify_action(proposal.action) == ActionClass.KINETIC
-        
+
         if decision.allowed:
             status = "ALLOW"
         elif decision.rule_id in ["vmga_kinetic_approval_required", "vmga_high_risk_review_required", "vmga_draft_justification_required"]:
@@ -1008,7 +1183,7 @@ class VMGAGmailAdapter:
                 status = "LOCKDOWN"
                 self._log_lockdown_event(actor_id, proposal)
                 self._save_state()  # Persist lockdown state immediately
-        
+
         # Log proposal - fail closed for kinetic if ledger fails
         log_success = self._log_proposal_received(proposal, status, decision, content_risk)
         if is_kinetic and self.ledger_required_for_kinetic and not log_success:
@@ -1025,7 +1200,7 @@ class VMGAGmailAdapter:
                 "action_class": "kinetic", "risk_score": content_risk.score,
                 "risk_flags": [k for k, v in content_risk.__dict__.items() if v],
             }
-        
+
         return {
             "status": status, "proposal_id": proposal.proposal_id,
             "proposal_hash": proposal.compute_hash(), "reason": decision.reason,
@@ -1035,7 +1210,7 @@ class VMGAGmailAdapter:
             "risk_score": content_risk.score,
             "risk_flags": [k for k, v in content_risk.__dict__.items() if v],
         }
-    
+
     def _save_state_with_fail_closed(
         self,
         is_kinetic: bool,
@@ -1055,79 +1230,136 @@ class VMGAGmailAdapter:
                 print(f"[VMGA ERROR] State persist failed for kinetic action", file=sys.stderr)
                 return False
             return True  # Non-kinetic can tolerate state save failures
-    
-    def approve_proposal(self, proposal_id: str, approver_id: str, approval_token: str) -> Dict[str, Any]:
-        """Approve a pending proposal with mandatory token verification.
-        
-        SECURITY: approval_token is REQUIRED. There is no self-generation.
-        The caller must provide a valid HMAC token computed with the shared secret.
-        """
-        with self._state_lock:
-            return self._approve_proposal_locked(proposal_id, approver_id, approval_token)
 
-    def _approve_proposal_locked(self, proposal_id: str, approver_id: str, approval_token: str) -> Dict[str, Any]:
+    def approve_proposal(
+        self,
+        proposal_id: str,
+        approver_id: str,
+        approval_token: Optional[str] = None,
+        *,
+        signature: str = "",
+        time_window: str = "",
+        approval_nonce: str = "",
+        key_id: str = "",
+        signature_version: str = "vmga-approval-ed25519-v1",
+    ) -> Dict[str, Any]:
+        """Approve a pending proposal with mandatory token verification.
+
+        HMAC mode requires approval_token. Signature mode requires a detached
+        Ed25519 signature plus the signed payload metadata.
+        """
+        if self.approval_auth == "hmac" and approval_token is None:
+            raise TypeError("approval_token is required in HMAC approval mode")
+        with self._state_lock:
+            return self._approve_proposal_locked(
+                proposal_id,
+                approver_id,
+                approval_token or "",
+                signature=signature,
+                time_window=time_window,
+                approval_nonce=approval_nonce,
+                key_id=key_id,
+                signature_version=signature_version,
+            )
+
+    def _approve_proposal_locked(
+        self,
+        proposal_id: str,
+        approver_id: str,
+        approval_token: str,
+        *,
+        signature: str = "",
+        time_window: str = "",
+        approval_nonce: str = "",
+        key_id: str = "",
+        signature_version: str = "vmga-approval-ed25519-v1",
+    ) -> Dict[str, Any]:
         """Approve a pending proposal while holding the adapter state lock."""
         # Check approver allowlist if configured
         if self.vmga_policy.approver_allowlist and approver_id not in self.vmga_policy.approver_allowlist:
             return {"status": "DENY", "error": "Approver not in allowlist", "error_code": "vmga_approver_unauthorized"}
-        
+
         if proposal_id not in self.pending_proposals:
             return {"status": "ERROR", "error": "Proposal not found or expired", "error_code": "vmga_proposal_not_found"}
-        
+
         proposal = self.pending_proposals[proposal_id]
         proposal_hash = proposal.compute_hash()
-        
-        # MANDATORY: Verify approval token (no self-generation)
-        if not self._verify_approval_token(proposal_id, proposal_hash, approver_id, approval_token):
-            return {"status": "DENY", "error": "Invalid approval token", "error_code": "vmga_approval_token_invalid"}
-        
+
+        token_hash = ""
+        signature_payload = None
+        if self.approval_auth == "signature":
+            ok, error, error_code, signature_payload = self._verify_approval_signature(
+                proposal_id,
+                approver_id,
+                signature=signature,
+                time_window=time_window,
+                approval_nonce=approval_nonce,
+                key_id=key_id,
+                signature_version=signature_version,
+            )
+            if not ok:
+                return {"status": "DENY", "error": error, "error_code": error_code}
+        else:
+            # MANDATORY: Verify approval token (no self-generation)
+            if not self._verify_approval_token(proposal_id, proposal_hash, approver_id, approval_token):
+                return {"status": "DENY", "error": "Invalid approval token", "error_code": "vmga_approval_token_invalid"}
+            token_hash = hashlib.sha256(approval_token.encode()).hexdigest()[:32]
+
         # Calculate expiration
         approved_at = datetime.now(timezone.utc)
         expires_at = approved_at + timedelta(seconds=self.vmga_policy.approval_expiry_seconds)
-        
-        # Store approval record (store hash of token, not token itself)
-        token_hash = hashlib.sha256(approval_token.encode()).hexdigest()[:32]
-        self.approvals[proposal_id] = ApprovalRecord.from_proposal(
+
+        # Store approval record (store hash of HMAC token, never the token itself).
+        record = ApprovalRecord.from_proposal(
             proposal=proposal, proposal_hash=proposal_hash, approver_id=approver_id,
             approved_at=approved_at.isoformat(), expires_at=expires_at.isoformat(),
             approval_token_hash=token_hash,
         )
-        
+        record.approval_auth = self.approval_auth
+        if self.approval_auth == "signature":
+            record.signature_payload = signature_payload
+            record.signature = signature
+            record.key_id = key_id
+            record.signature_version = signature_version
+            record.approval_nonce = approval_nonce
+            self._used_approval_nonces[self._nonce_key(approver_id, key_id, approval_nonce)] = approved_at.isoformat()
+        self.approvals[proposal_id] = record
+
         del self.pending_proposals[proposal_id]
-        
+
         # Save state with fail-closed
         if not self._save_state_with_fail_closed(True, proposal=proposal, operation="proposal_approved"):
             # Rollback
             self.pending_proposals[proposal_id] = proposal
             del self.approvals[proposal_id]
             return {"status": "DENY", "error": "Failed to persist approval state", "error_code": "vmga_state_persist_failed"}
-        
+
         # Log approval - fail closed
-        log_success = self._log_proposal_approved(proposal, approver_id, token_hash, expires_at)
+        log_success = self._log_proposal_approved(proposal, approver_id, token_hash, expires_at, record)
         if self.ledger_required_for_kinetic and not log_success:
             # Rollback and lockdown
             self.pending_proposals[proposal_id] = proposal
             del self.approvals[proposal_id]
             self.lockdown_active = True
             return {"status": "LOCKDOWN", "error": "Ledger failure triggered lockdown", "error_code": "vmga_ledger_failure_lockdown"}
-        
+
         return {
             "status": "APPROVED", "proposal_id": proposal_id,
             "proposal_hash": proposal_hash, "approver_id": approver_id,
             "expires_at": expires_at.isoformat(),
         }
-    
+
     def _is_approval_valid(self, proposal_id: str, proposal_hash: str, approver_id: str, approval_token: str) -> Tuple[bool, str, str]:
         """Verify approval exists, hasn't expired, matches hash, and token is cryptographically valid.
-        
+
         In strict_mode, also verifies HMAC to prevent attacks where attacker writes arbitrary token_hash to file.
         Includes rate limiting for repeated invalid token attempts.
         """
         if proposal_id not in self.approvals:
             return False, "Approval not found", "vmga_approval_not_found"
-        
+
         approval = self.approvals[proposal_id]
-        
+
         # Rate limiting: check for repeated invalid attempts
         attempt_key = f"{proposal_id}:{approver_id}"
         now = datetime.now(timezone.utc)
@@ -1141,7 +1373,7 @@ class VMGAGmailAdapter:
                 else:
                     # Reset after lockout period
                     del self._failed_token_attempts[attempt_key]
-        
+
         # Verify hash binding
         if approval.proposal_hash != proposal_hash:
             self._record_failed_attempt(attempt_key, now)
@@ -1155,23 +1387,52 @@ class VMGAGmailAdapter:
         elif self.strict_mode:
             self._record_failed_attempt(attempt_key, now)
             return False, "Approval binding hash missing", "vmga_approval_binding_missing"
-        
-        # Verify token hash matches (first line of defense)
-        token_hash = hashlib.sha256(approval_token.encode()).hexdigest()[:32]
-        if approval.approval_token_hash != token_hash:
-            self._record_failed_attempt(attempt_key, now)
-            return False, "Approval token mismatch", "vmga_approval_token_mismatch"
-        
-        # In strict_mode, also verify HMAC (prevents file-write attacks)
-        if self.strict_mode and self.approval_secret:
-            if not self._verify_approval_token(proposal_id, proposal_hash, approver_id, approval_token):
+
+        if approval.approval_auth == "signature":
+            if not approval.signature or not approval.signature_payload:
+                self._record_failed_attempt(attempt_key, now)
+                return False, "Approval signature evidence missing", "vmga_signature_evidence_missing"
+            try:
+                expected_payload = {
+                    "proposal_id": approval.proposal_id,
+                    "proposal_hash": approval.proposal_hash,
+                    "approver_id": approval.approver_id,
+                    "time_window": approval.signature_payload["time_window"],
+                    "approval_nonce": approval.approval_nonce,
+                    "key_id": approval.key_id,
+                    "signature_version": approval.signature_version,
+                }
+                if approval.signature_payload != expected_payload:
+                    self._record_failed_attempt(attempt_key, now)
+                    return False, "Approval signature payload mismatch", "vmga_signature_payload_mismatch"
+                entry = self._approval_key_entry(approval.approver_id, approval.key_id)
+                if entry is None or entry.get("algorithm") != "ed25519":
+                    self._record_failed_attempt(attempt_key, now)
+                    return False, "Approval signature key cannot verify", "vmga_signature_key_unknown"
+                public_key = self._load_ed25519_public_key(entry["public_key"])
+                public_key.verify(
+                    base64.b64decode(approval.signature),
+                    self.canonical_approval_signature_payload(approval.signature_payload),
+                )
+            except (KeyError, ValueError, TypeError, InvalidSignature):
+                self._record_failed_attempt(attempt_key, now)
+                return False, "Approval signature verification failed", "vmga_signature_invalid"
+        else:
+            # Verify token hash matches (first line of defense)
+            token_hash = hashlib.sha256(approval_token.encode()).hexdigest()[:32]
+            if approval.approval_token_hash != token_hash:
+                self._record_failed_attempt(attempt_key, now)
+                return False, "Approval token mismatch", "vmga_approval_token_mismatch"
+
+            # In strict_mode, also verify HMAC (prevents file-write attacks)
+            if self.strict_mode and self.approval_secret and not self._verify_approval_token(proposal_id, proposal_hash, approver_id, approval_token):
                 self._record_failed_attempt(attempt_key, now)
                 return False, "Approval token HMAC verification failed", "vmga_approval_token_invalid"
-        
+
         # Success - clear failed attempts for this key
         if attempt_key in self._failed_token_attempts:
             del self._failed_token_attempts[attempt_key]
-        
+
         # Check expiration
         try:
             expires_at = datetime.fromisoformat(approval.expires_at)
@@ -1179,13 +1440,13 @@ class VMGAGmailAdapter:
                 return False, "Approval expired", "vmga_approval_expired"
         except ValueError:
             return False, "Invalid expiration format", "vmga_approval_expiry_invalid"
-        
+
         # Check not already used
         if approval.used:
             return False, "Approval already used", "vmga_approval_already_used"
-        
+
         return True, "Valid", "vmga_approval_valid"
-    
+
     def _record_failed_attempt(self, attempt_key: str, now: datetime) -> None:
         """Record a failed token attempt for rate limiting and persist to disk."""
         if attempt_key not in self._failed_token_attempts:
@@ -1193,7 +1454,7 @@ class VMGAGmailAdapter:
         self._failed_token_attempts[attempt_key]["count"] += 1
         # Persist immediately to survive restart
         self.state_store.save_rate_limit_state(self._failed_token_attempts)
-    
+
     def execute_approved(
         self, proposal_id: str, proposal_hash: str, approval_token: str, executor_fn: Callable,
     ) -> Dict[str, Any]:
@@ -1207,24 +1468,24 @@ class VMGAGmailAdapter:
         """Execute an approved proposal while holding the adapter execution lock."""
         if proposal_id not in self.approvals:
             return {"status": "DENY", "error": "Approval not found", "error_code": "vmga_approval_not_found"}
-        
+
         approval = self.approvals[proposal_id]
-        
+
         # Verify approval with token and approver_id
         is_valid, reason, error_code = self._is_approval_valid(proposal_id, proposal_hash, approval.approver_id, approval_token)
         if not is_valid:
             return {"status": "DENY", "error": reason, "error_code": error_code, "rule_id": error_code}
-        
+
         # Build Vesta envelope
         request = ExecutionRequestEnvelope(
             session_id=proposal_id, actor_id="vmga_executor", tool_id="gmail_execute",
             plugin_id="vmga_gmail", tool_input={"proposal_id": proposal_id, "proposal_hash": proposal_hash},
         )
-        
+
         execution_result = None
         error_info = None
         success = False
-        
+
         try:
             result = self.vesta.execute(request, executor_fn)
             tool_output = getattr(result, "tool_output", getattr(result, "output", None))
@@ -1238,7 +1499,7 @@ class VMGAGmailAdapter:
         except Exception as e:
             error_info = str(e)
             execution_result = {"status": "ERROR", "error": error_info, "error_code": "vmga_execution_failed"}
-        
+
         # Mark used ONLY after successful execution with fail-closed persistence
         if success:
             approval.used = True
@@ -1257,12 +1518,12 @@ class VMGAGmailAdapter:
                     "error": "Execution succeeded but failed to persist used state (fail-closed)",
                     "error_code": "vmga_state_persist_failed"
                 }
-        
+
         # Log execution
         self._log_action_executed(proposal_id, proposal_hash, approval.approver_id, execution_result, error_info)
-        
+
         return execution_result
-    
+
     def reset_lockdown(self, admin_id: str) -> Dict[str, Any]:
         with self._state_lock:
             return self._reset_lockdown_locked(admin_id)
@@ -1281,7 +1542,7 @@ class VMGAGmailAdapter:
         if value is None:
             return None
         return redact_text(str(value))[:limit]
-    
+
     def _log_proposal_received(
         self, proposal: Optional[VMGAProposal], status: str, decision: Optional[PolicyDecision],
         content_risk: ContentRisk, rule_id: Optional[str] = None, reason: Optional[str] = None,
@@ -1307,8 +1568,15 @@ class VMGAGmailAdapter:
             "correlation_id": self._proposal_correlation_id(proposal),
         }
         return self._write_to_ledger(event)
-    
-    def _log_proposal_approved(self, proposal: VMGAProposal, approver_id: str, token_hash: str, expires_at: datetime) -> bool:
+
+    def _log_proposal_approved(
+        self,
+        proposal: VMGAProposal,
+        approver_id: str,
+        token_hash: str,
+        expires_at: datetime,
+        record: Optional["ApprovalRecord"] = None,
+    ) -> bool:
         event = {
             "event_type": "vmga_proposal_approved",
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1317,13 +1585,25 @@ class VMGAGmailAdapter:
             "action": proposal.action.value,
             "actor_id": proposal.actor_id,
             "approver_id": approver_id,
+            "approval_auth": record.approval_auth if record else self.approval_auth,
             "approval_token_hash": token_hash,
             "expires_at": expires_at.isoformat(),
             "vmga_profile": self.profile,
             "correlation_id": self._proposal_correlation_id(proposal),
         }
+        if record is not None and record.approval_auth == "signature":
+            # The detached signature is public, non-secret evidence: persisting
+            # it in full (not a hash) makes operator approval non-repudiable and
+            # independently re-verifiable against the approver public key.
+            event["approval_signature"] = {
+                "signature": record.signature,
+                "signed_payload": record.signature_payload,
+                "key_id": record.key_id,
+                "signature_version": record.signature_version,
+                "approval_nonce": record.approval_nonce,
+            }
         return self._write_to_ledger(event)
-    
+
     def _log_action_executed(self, proposal_id: str, proposal_hash: str, approver_id: str, result: Dict[str, Any], error_info: Optional[str]) -> bool:
         event = {
             "event_type": "vmga_action_executed",
@@ -1343,7 +1623,7 @@ class VMGAGmailAdapter:
             elif approval.parameters.get("correlation_id"):
                 event["correlation_id"] = str(approval.parameters["correlation_id"])
         return self._write_to_ledger(event)
-    
+
     def _log_lockdown_event(self, actor_id: str, proposal: VMGAProposal) -> bool:
         event = {
             "event_type": "vmga_lockdown_triggered",
@@ -1356,7 +1636,7 @@ class VMGAGmailAdapter:
             "vmga_profile": self.profile,
         }
         return self._write_to_ledger(event)
-    
+
     def _log_lockdown_reset(self, admin_id: str, was_locked: bool) -> bool:
         event = {
             "event_type": "vmga_lockdown_reset",
@@ -1366,7 +1646,7 @@ class VMGAGmailAdapter:
             "vmga_profile": self.profile,
         }
         return self._write_to_ledger(event)
-    
+
     def _write_to_ledger(self, event: Dict[str, Any]) -> bool:
         try:
             if hasattr(self.vesta, 'audit_ledger') and hasattr(self.vesta.audit_ledger, 'append'):

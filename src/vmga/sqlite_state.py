@@ -45,6 +45,10 @@ class SQLiteStateStore:
                   attempt_key TEXT PRIMARY KEY,
                   payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS approval_nonces (
+                  nonce_key TEXT PRIMARY KEY,
+                  used_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS lockdown_state (
                   id INTEGER PRIMARY KEY CHECK (id = 1),
                   lockdown_active INTEGER NOT NULL,
@@ -107,6 +111,35 @@ class SQLiteStateStore:
         if stale_keys:
             with self._connect() as conn:
                 conn.executemany("DELETE FROM rate_limit_state WHERE attempt_key = ?", [(key,) for key in stale_keys])
+        return active
+
+    def save_approval_nonce_state(self, used_nonces: Dict[str, str]) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM approval_nonces")
+            conn.executemany(
+                "INSERT INTO approval_nonces (nonce_key, used_at) VALUES (?, ?)",
+                sorted(used_nonces.items()),
+            )
+
+    def load_approval_nonce_state(self, validity_horizon_seconds: int = 3900) -> Dict[str, str]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT nonce_key, used_at FROM approval_nonces").fetchall()
+        now = datetime.now(timezone.utc)
+        active: Dict[str, str] = {}
+        stale_keys: list[str] = []
+        for row in rows:
+            try:
+                used_at = datetime.fromisoformat(str(row["used_at"]))
+            except ValueError:
+                stale_keys.append(row["nonce_key"])
+                continue
+            if (now - used_at).total_seconds() > validity_horizon_seconds:
+                stale_keys.append(row["nonce_key"])
+                continue
+            active[row["nonce_key"]] = row["used_at"]
+        if stale_keys:
+            with self._connect() as conn:
+                conn.executemany("DELETE FROM approval_nonces WHERE nonce_key = ?", [(key,) for key in stale_keys])
         return active
 
     def save_lockdown_state(self, lockdown_active: bool, denial_counts: Dict[str, int]) -> None:

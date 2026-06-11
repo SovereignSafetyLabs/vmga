@@ -33,12 +33,15 @@ formal sandbox proof: it reports what VMGA can observe from configuration and
 operator-supplied attestations, and it deliberately fails toward unknown rather
 than optimistic hard-ready claims.
 
-Two v0.3.0 security properties are designed but not yet implemented:
-tamper-evident evidence (`docs/evidence_integrity_design.md`) and asymmetric
-out-of-domain approval signatures (`docs/approval_signing_design.md`). Until
-those land, evidence remains append-only JSONL with advisory verification, and
-approvals remain HMAC-based. Do not claim a hard evidence-integrity or
-out-of-domain approval boundary from configuration strings alone.
+Tamper-evident evidence (`docs/evidence_integrity_design.md`) remains a v0.3.0
+design target: evidence is still append-only JSONL with advisory verification.
+VMGA now has opt-in Ed25519 approval-signature mode
+(`docs/approval_signing_design.md`). The broker holds public keys only, and hard
+approval-enforcement claims require the approver private key to live outside
+both broker and agent authority domains. Residuals: VMGA cannot detect an
+attacker who controls the approver private key, a compromised operator signing
+device, or an operator intentionally signing a bad approval. HMAC approval mode
+remains available for advisory and development use and is broker-forgeable.
 
 ### Known Integration Advisory
 
@@ -85,6 +88,16 @@ Run the local broker with the fake backend for offline development:
 export VMGA_APPROVAL_SECRET="replace-with-a-local-dev-secret"
 vmga-broker --backend fake --policy policies/draft_assist.yaml --allow-unauthenticated
 ```
+
+For Ed25519 approval signatures, start the broker with public keys only:
+
+```bash
+vmga-broker --approval-auth signature --approval-public-keys /operator/keyring.json ...
+```
+
+The operator signs out of band with `vmga-approval-sign`. Private keys must not
+be stored in the broker environment, state database, policy file, evidence
+ledger, repository, or any agent-readable path.
 
 For a gogcli-backed broker, point VMGA at the agent-safe wrapper and keep gog
 OAuth config outside the agent-readable workspace:

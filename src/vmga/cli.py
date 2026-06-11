@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import hmac
 import json
@@ -10,6 +11,8 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 from .backends import FakeGmailBackend, GogCLIBackend
 from .broker import VMGABroker, make_server
@@ -91,6 +94,37 @@ def approval_token_main(argv: list[str] | None = None) -> int:
         }, indent=2, sort_keys=True))
     else:
         print(token)
+    return 0
+
+
+def approval_sign_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Sign a VMGA approval payload with Ed25519")
+    parser.add_argument("--proposal-id", required=True)
+    parser.add_argument("--proposal-hash", required=True)
+    parser.add_argument("--approver-id", required=True)
+    parser.add_argument("--key-id", required=True)
+    parser.add_argument("--time-window", default=None, help="UTC approval time window, YYYY-MM-DD-HH-MM")
+    parser.add_argument("--nonce", required=True, help="High-entropy single-use approval nonce")
+    parser.add_argument("--private-key", required=True, help="Operator-owned PEM Ed25519 private key path")
+    parser.add_argument("--signature-version", default="vmga-approval-ed25519-v1")
+    args = parser.parse_args(argv)
+
+    time_window = args.time_window or VMGAGmailAdapter.approval_time_window(datetime.now(timezone.utc))
+    payload = {
+        "proposal_id": args.proposal_id,
+        "proposal_hash": args.proposal_hash,
+        "approver_id": args.approver_id,
+        "time_window": time_window,
+        "approval_nonce": args.nonce,
+        "key_id": args.key_id,
+        "signature_version": args.signature_version,
+    }
+    private_key = load_pem_private_key(Path(args.private_key).read_bytes(), password=None)
+    signature = private_key.sign(VMGAGmailAdapter.canonical_approval_signature_payload(payload))
+    print(json.dumps({
+        **payload,
+        "signature": base64.b64encode(signature).decode("ascii"),
+    }, indent=2, sort_keys=True))
     return 0
 
 
@@ -287,6 +321,8 @@ def broker_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ledger-backups", type=int, default=5, help="Number of rotated ledger files to keep")
     parser.add_argument("--backend", choices=["fake", "gogcli"], default="fake", help="Mailbox backend")
     parser.add_argument("--approval-secret-env", default="VMGA_APPROVAL_SECRET", help="Env var containing approval HMAC secret")
+    parser.add_argument("--approval-auth", choices=["hmac", "signature"], default="hmac", help="Approval authentication mode")
+    parser.add_argument("--approval-public-keys", default="", help="JSON keyring of approver public keys for signature mode")
     parser.add_argument("--bearer-token-env", default="VMGA_BROKER_TOKEN", help="Optional env var containing broker bearer token")
     parser.add_argument("--allow-unauthenticated", action="store_true", help="Allow unauthenticated broker access for loopback-only development")
     parser.add_argument("--gog-binary", default="", help="Path to gog-agent-safe or gog")
@@ -300,9 +336,15 @@ def broker_main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     approval_secret = os.getenv(args.approval_secret_env)
-    if not approval_secret:
+    if args.approval_auth == "hmac" and not approval_secret:
         print(f"{args.approval_secret_env} is required", file=sys.stderr)
         return 2
+    approval_public_keys = {}
+    if args.approval_auth == "signature":
+        if not args.approval_public_keys:
+            print("--approval-public-keys is required for signature approval mode", file=sys.stderr)
+            return 2
+        approval_public_keys = json.loads(Path(args.approval_public_keys).read_text(encoding="utf-8"))
 
     policy = load_vmga_policy(args.policy)
     ledger = JSONLVMGALedger(Path(args.ledger), rotate_bytes=args.ledger_rotate_bytes, backup_count=args.ledger_backups)
@@ -314,6 +356,8 @@ def broker_main(argv: list[str] | None = None) -> int:
         approval_secret=approval_secret,
         strict_mode=True,
         fail_closed_on_corrupted_state=True,
+        approval_auth=args.approval_auth,
+        approval_public_keys=approval_public_keys,
     )
     backend = _build_backend(args)
     executor = VMGAExecutor(adapter, backend)
