@@ -1,9 +1,10 @@
 import json
+import socket
 import sqlite3
 import tempfile
 import threading
 import time
-from urllib import request
+from urllib import error, request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from vmga import (
     VMGAGmailAdapter,
     VMGAProposal,
 )
-from vmga.broker import make_server
+from vmga.broker import MAX_REQUEST_BODY_BYTES, make_server
 from vmga.approvals import approval_contract, validate_approval_dict
 from vmga.evidence import evidence_event, verify_events
 from vmga.ledger import JSONLVMGALedger, LedgerVestaAdapter
@@ -450,6 +451,79 @@ def test_http_broker_exposes_posture_endpoint():
     assert any(check["id"] == "direct_gmail_bypass" and check["status"] == "unknown" for check in payload["checks"])
 
 
+def test_http_broker_rejects_oversized_request_body():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        server = make_server("127.0.0.1", 0, VMGABroker(adapter))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = server.server_address
+            with socket.create_connection((host, port), timeout=5) as client:
+                client.sendall(
+                    (
+                        "POST /v1/proposals HTTP/1.1\r\n"
+                        f"Host: {host}:{port}\r\n"
+                        "Content-Type: application/json\r\n"
+                        f"Content-Length: {MAX_REQUEST_BODY_BYTES + 1}\r\n"
+                        "Connection: close\r\n"
+                        "\r\n"
+                    ).encode("ascii")
+                )
+                response = client.recv(4096).decode("utf-8")
+            body = response.split("\r\n\r\n", 1)[1]
+            payload = json.loads(body)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    assert " 400 " in response.splitlines()[0]
+    assert payload == {
+        "status": "DENY",
+        "error_code": "vmga_broker_bad_request",
+        "error": "Invalid VMGA broker request",
+    }
+
+
+def test_http_broker_returns_generic_error_for_deep_failures():
+    class ExplodingBroker:
+        def propose(self, _payload):
+            raise RuntimeError("secret path /Users/operator/.config/gog leaked")
+
+        def approve(self, _payload):
+            raise AssertionError("unused")
+
+        def execute(self, _payload):
+            raise AssertionError("unused")
+
+    server = make_server("127.0.0.1", 0, ExplodingBroker())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        req = request.Request(
+            f"http://{host}:{port}/v1/proposals",
+            data=b'{"action":"read","actor_id":"agent"}',
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with pytest.raises(error.HTTPError) as excinfo:
+            request.urlopen(req, timeout=5)
+        payload = json.loads(excinfo.value.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert excinfo.value.code == 500
+    assert payload == {
+        "status": "DENY",
+        "error_code": "vmga_broker_request_failed",
+        "error": "VMGA broker request failed",
+    }
+
+
 def test_broker_executes_allowed_search_through_backend():
     class SearchBackend:
         def __init__(self):
@@ -481,6 +555,29 @@ def test_broker_executes_allowed_search_through_backend():
         assert backend.max_results == 2
 
 
+def test_broker_returns_generic_backend_error_details():
+    class ExplodingSearchBackend:
+        def search(self, _query, max_results=10):
+            raise RuntimeError("secret path /Users/operator/.config/gog leaked")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        broker = VMGABroker(adapter, backend=ExplodingSearchBackend())
+
+        result = broker.propose(
+            {
+                "action": "read",
+                "actor_id": "agent_1",
+                "search_query": "invoice",
+            }
+        )
+
+    assert result["status"] == "ALLOW"
+    assert result["backend_result"]["error_code"] == "vmga_backend_execution_failed"
+    assert result["backend_result"]["error"] == "Backend execution failed"
+    assert "secret path" not in json.dumps(result)
+
+
 def test_broker_executes_allowed_search_through_shipped_fake_backend():
     with tempfile.TemporaryDirectory() as tmpdir:
         adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
@@ -504,6 +601,37 @@ def test_broker_executes_allowed_search_through_shipped_fake_backend():
         assert result["status"] == "ALLOW"
         assert result["backend_result"]["backend"] == "fake"
         assert len(result["backend_result"]["messages"]) == 1
+
+
+def test_broker_rejects_crlf_in_single_line_fields():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapter = make_adapter(SQLiteStateStore(str(Path(tmpdir) / "vmga.sqlite3")))
+        broker = VMGABroker(adapter)
+
+        subject = broker.propose(
+            {
+                "action": "create_draft",
+                "actor_id": "agent_1",
+                "recipients": ["ops@example.com"],
+                "content": "body may contain\nnewlines",
+                "subject": "Safe\r\nBcc: hidden@example.com",
+            }
+        )
+        label = broker.propose(
+            {
+                "action": "apply_label",
+                "actor_id": "agent_1",
+                "message_ids": ["m1"],
+                "parameters": {"label": "Needs Review\nBcc: hidden@example.com"},
+            }
+        )
+
+    assert subject["status"] == "DENY"
+    assert subject["error_code"] == "vmga_broker_bad_request"
+    assert "control characters" in subject["error"]
+    assert label["status"] == "DENY"
+    assert label["error_code"] == "vmga_broker_bad_request"
+    assert "control characters" in label["error"]
 
 
 def test_broker_rejects_action_parameter_smuggling():

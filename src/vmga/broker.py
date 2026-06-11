@@ -15,6 +15,11 @@ from .posture import PostureConfig, assess_posture
 from .vmga_adapter import VMGAGmailAdapter
 
 
+MAX_REQUEST_BODY_BYTES = 1_000_000
+GENERIC_REQUEST_ERROR = "VMGA broker request failed"
+GENERIC_BAD_REQUEST_ERROR = "Invalid VMGA broker request"
+
+
 class VMGABroker:
     def __init__(
         self,
@@ -89,7 +94,12 @@ class VMGABroker:
                 if message_id:
                     return self.backend.read(str(message_id))
         except Exception as exc:
-            return {"status": "ERROR", "error_code": "vmga_backend_execution_failed", "error": str(exc)}
+            return {
+                "status": "ERROR",
+                "error_code": "vmga_backend_execution_failed",
+                "error": "Backend execution failed",
+                "error_class": exc.__class__.__name__,
+            }
         return None
 
     def approve(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -133,9 +143,14 @@ class VMGAHTTPHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_json(self) -> Dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("invalid content length") from exc
         if length <= 0:
             return {}
+        if length > MAX_REQUEST_BODY_BYTES:
+            raise ValueError("request body too large")
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def _authorized(self) -> bool:
@@ -159,20 +174,27 @@ class VMGAHTTPHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             self._send(401, {"status": "DENY", "error_code": "vmga_broker_unauthorized"})
             return
-        payload = self._read_json()
-        routes = {
-            "/propose": self.broker.propose,
-            "/v1/proposals": self.broker.propose,
-            "/approve": self.broker.approve,
-            "/v1/approvals": self.broker.approve,
-            "/execute": self.broker.execute,
-            "/v1/executions": self.broker.execute,
-        }
-        handler = routes.get(self.path)
-        if handler is None:
-            self._send(404, {"status": "ERROR", "error_code": "vmga_broker_not_found"})
+        try:
+            payload = self._read_json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            self._send(400, {"status": "DENY", "error_code": "vmga_broker_bad_request", "error": GENERIC_BAD_REQUEST_ERROR})
             return
-        self._send(200, handler(payload))
+        try:
+            routes = {
+                "/propose": self.broker.propose,
+                "/v1/proposals": self.broker.propose,
+                "/approve": self.broker.approve,
+                "/v1/approvals": self.broker.approve,
+                "/execute": self.broker.execute,
+                "/v1/executions": self.broker.execute,
+            }
+            handler = routes.get(self.path)
+            if handler is None:
+                self._send(404, {"status": "ERROR", "error_code": "vmga_broker_not_found"})
+                return
+            self._send(200, handler(payload))
+        except Exception:
+            self._send(500, {"status": "DENY", "error_code": "vmga_broker_request_failed", "error": GENERIC_REQUEST_ERROR})
 
 
 def make_server(host: str, port: int, broker: VMGABroker, bearer_token: Optional[str] = None) -> ThreadingHTTPServer:
