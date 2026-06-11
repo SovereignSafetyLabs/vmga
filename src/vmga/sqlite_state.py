@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from .evidence_integrity import EvidenceCheckpoint
 from .vmga_adapter import ApprovalRecord, VMGAProposal
 
 
@@ -53,6 +54,10 @@ class SQLiteStateStore:
                   id INTEGER PRIMARY KEY CHECK (id = 1),
                   lockdown_active INTEGER NOT NULL,
                   denial_counts TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS evidence_head (
+                  id INTEGER PRIMARY KEY CHECK (id = 1),
+                  payload TEXT NOT NULL
                 );
                 """
             )
@@ -161,6 +166,24 @@ class SQLiteStateStore:
         if row is None:
             return False, {}, False
         return bool(row["lockdown_active"]), json.loads(row["denial_counts"]), False
+
+    def save_evidence_head(self, checkpoint: EvidenceCheckpoint) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO evidence_head (id, payload)
+                VALUES (1, ?)
+                ON CONFLICT(id) DO UPDATE SET payload=excluded.payload
+                """,
+                (json.dumps(checkpoint.to_dict(), sort_keys=True),),
+            )
+
+    def load_evidence_head(self) -> Optional[EvidenceCheckpoint]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT payload FROM evidence_head WHERE id = 1").fetchone()
+        if row is None:
+            return None
+        return EvidenceCheckpoint.from_dict(json.loads(row["payload"]))
 
     def load_all_state(
         self,

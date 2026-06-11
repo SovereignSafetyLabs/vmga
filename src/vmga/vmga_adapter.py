@@ -30,6 +30,14 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import load_ssh_public_key
 
+from .evidence_integrity import (
+    EvidenceCheckpoint,
+    EvidenceHMACConfig,
+    add_integrity_metadata,
+    canonical_json_line,
+    load_segmented_events,
+    recover_one_ahead,
+)
 from .models import ExecutionRequestEnvelope, PolicyDecision
 from .redaction import redact_text
 
@@ -582,6 +590,7 @@ class VMGAStateStore:
 
         self.pending_path = self.storage_path / "pending_proposals.json"
         self.approvals_path = self.storage_path / "approvals.json"
+        self.evidence_head_path = self.storage_path / "evidence_head.json"
         self._set_permissions()
 
     def _set_permissions(self) -> None:
@@ -593,7 +602,7 @@ class VMGAStateStore:
             # Set existing files to 0o600
             rate_limit_path = self.storage_path / "rate_limit_state.json"
             nonce_path = self.storage_path / "approval_nonces.json"
-            for path in [self.pending_path, self.approvals_path, rate_limit_path, nonce_path]:
+            for path in [self.pending_path, self.approvals_path, rate_limit_path, nonce_path, self.evidence_head_path]:
                 if path.exists():
                     os.chmod(path, 0o600)
         except OSError:
@@ -774,6 +783,16 @@ class VMGAStateStore:
         except (json.JSONDecodeError, KeyError, OSError):
             return False, {}, True  # Signal corruption
 
+    def save_evidence_head(self, checkpoint: EvidenceCheckpoint) -> None:
+        self._atomic_write_json(self.evidence_head_path, checkpoint.to_dict())
+
+    def load_evidence_head(self) -> Optional[EvidenceCheckpoint]:
+        if not self.evidence_head_path.exists():
+            return None
+        with open(self.evidence_head_path, "r", encoding="utf-8") as f:
+            return EvidenceCheckpoint.from_dict(json.load(f))
+
+
     def load_all_state(self, proposal_ttl_seconds: int = 86400, fail_closed: bool = False, max_state_size_bytes: int = 10_000_000) -> Dict[str, Any]:
         """Load all state atomically with optional fail-closed semantics and size limits.
 
@@ -908,6 +927,11 @@ class VMGAGmailAdapter:
             else {"state": "verified_intact", "reason": "configured"}
         )
 
+        self.evidence_hmac = EvidenceHMACConfig.from_env()
+        if self.evidence_hmac is not None:
+            self._recover_evidence_head_if_one_ahead()
+
+
     def _save_state(self) -> None:
         """Save all state including lockdown and TTL-filtered proposals."""
         self.state_store.save_pending_proposals(self.pending_proposals, self.proposal_ttl_seconds)
@@ -938,6 +962,36 @@ class VMGAGmailAdapter:
             "vmga_profile": self.profile,
         }
         return self._write_to_ledger(event)
+
+    def _load_evidence_head(self) -> Optional[EvidenceCheckpoint]:
+        loader = getattr(self.state_store, "load_evidence_head", None)
+        if loader is None:
+            return None
+        return loader()
+
+    def _save_evidence_head(self, checkpoint: EvidenceCheckpoint) -> None:
+        saver = getattr(self.state_store, "save_evidence_head", None)
+        if saver is None:
+            raise RuntimeError("state store does not support evidence integrity checkpoint")
+        saver(checkpoint)
+
+    def _recover_evidence_head_if_one_ahead(self) -> None:
+        if not (hasattr(self.vesta, "audit_ledger") and hasattr(self.vesta.audit_ledger, "path")):
+            return
+        try:
+            ledger_path = str(Path(self.vesta.audit_ledger.path))
+            checkpoint = self._load_evidence_head()
+            events = load_segmented_events(ledger_path)
+            recovered = recover_one_ahead(
+                events,
+                checkpoint=checkpoint,
+                keyring={self.evidence_hmac.key_id: self.evidence_hmac.key},
+                ledger_path=ledger_path,
+            )
+            if recovered is not None:
+                self._save_evidence_head(recovered)
+        except Exception:
+            return
 
     @staticmethod
     def approval_time_window(now: Optional[datetime] = None, *, window_seconds: int = 300) -> str:
@@ -1650,8 +1704,35 @@ class VMGAGmailAdapter:
     def _write_to_ledger(self, event: Dict[str, Any]) -> bool:
         try:
             if hasattr(self.vesta, 'audit_ledger') and hasattr(self.vesta.audit_ledger, 'append'):
-                self.vesta.audit_ledger.append(event)
-                return True
+                with self._state_lock:
+                    if self.evidence_hmac is None:
+                        self.vesta.audit_ledger.append(event)
+                    else:
+                        checkpoint = self._load_evidence_head()
+                        prev_mac = checkpoint.last_mac if checkpoint else None
+                        sequence = checkpoint.last_sequence + 1 if checkpoint else 1
+                        signed = add_integrity_metadata(
+                            event,
+                            key_id=self.evidence_hmac.key_id,
+                            key=self.evidence_hmac.key,
+                            sequence=sequence,
+                            prev_mac=prev_mac,
+                        )
+                        line = canonical_json_line(signed)
+                        if hasattr(self.vesta.audit_ledger, 'append_line'):
+                            self.vesta.audit_ledger.append_line(line)
+                        else:
+                            self.vesta.audit_ledger.append(signed)
+                        mac = signed["integrity"]["mac"]
+                        self._save_evidence_head(EvidenceCheckpoint(
+                            ledger_path=str(getattr(self.vesta.audit_ledger, "path", "")),
+                            genesis_sequence=checkpoint.genesis_sequence if checkpoint else sequence,
+                            genesis_mac=checkpoint.genesis_mac if checkpoint else mac,
+                            last_sequence=sequence,
+                            last_mac=mac,
+                            key_id=self.evidence_hmac.key_id,
+                        ))
+                    return True
             else:
                 import sys
                 print(f"[VMGA WARNING] Ledger unavailable, event dropped: {event['event_type']}", file=sys.stderr)

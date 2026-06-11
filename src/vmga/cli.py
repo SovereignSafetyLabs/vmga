@@ -16,7 +16,13 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 from .backends import FakeGmailBackend, GogCLIBackend
 from .broker import VMGABroker, make_server
-from .evidence import load_jsonl_events, verify_events
+from .evidence import verify_events
+from .evidence_integrity import (
+    EvidenceCheckpoint,
+    EvidenceHMACConfig,
+    load_segmented_events,
+    verify_integrity,
+)
 from .executor import VMGAExecutor
 from .ledger import JSONLVMGALedger, LedgerVestaAdapter
 from .posture import PostureConfig, assess_posture, print_posture_summary
@@ -29,11 +35,14 @@ def verify_evidence_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify VMGA JSONL evidence")
     parser.add_argument("path", help="Path to VMGA evidence JSONL")
     parser.add_argument("--json", action="store_true", help="Emit JSON result")
+    parser.add_argument("--checkpoint", help="Path to evidence expected-head checkpoint JSON")
+    parser.add_argument("--state-db", help="SQLite state DB containing the evidence expected-head checkpoint")
+    parser.add_argument("--hmac-key", action="append", default=[], metavar="KEY_ID=SECRET", help="Verification HMAC key; repeat for rotated keys")
     args = parser.parse_args(argv)
 
     try:
-        events = load_jsonl_events(args.path)
-        result = verify_events(events)
+        events = load_segmented_events(args.path)
+        sequence_result = verify_events(events)
     except Exception as exc:
         result = {"valid": False, "errors": [str(exc)], "warnings": []}
         if args.json:
@@ -42,16 +51,52 @@ def verify_evidence_main(argv: list[str] | None = None) -> int:
             print(f"VMGA evidence invalid: {exc}", file=sys.stderr)
         return 2
 
-    payload = result.to_dict()
+    checkpoint = None
+    try:
+        if args.checkpoint:
+            with open(args.checkpoint, "r", encoding="utf-8") as f:
+                checkpoint = EvidenceCheckpoint.from_dict(json.load(f))
+        elif args.state_db:
+            checkpoint = SQLiteStateStore(args.state_db).load_evidence_head()
+    except Exception as exc:
+        checkpoint_error = str(exc)
+    else:
+        checkpoint_error = ""
+
+    keyring: dict[str, bytes] = {}
+    try:
+        env_config = EvidenceHMACConfig.from_env()
+        if env_config:
+            keyring[env_config.key_id] = env_config.key
+        for item in args.hmac_key:
+            key_id, sep, secret = item.partition("=")
+            if not sep or not key_id:
+                raise ValueError("--hmac-key must be formatted as key_id=secret")
+            keyring[key_id] = secret.encode("utf-8")
+        if checkpoint_error:
+            integrity = {"state": "cannot_verify", "reason": "missing_expected_head", "errors": [checkpoint_error], "warnings": []}
+        else:
+            integrity = verify_integrity(events, checkpoint=checkpoint, keyring=keyring).to_dict()
+    except Exception as exc:
+        integrity = {"state": "cannot_verify", "reason": "malformed_integrity_metadata", "errors": [str(exc)], "warnings": []}
+
+    payload = {
+        "valid": sequence_result.valid and integrity["state"] == "verified_intact",
+        "event_sequence": sequence_result.to_dict(),
+        "integrity": integrity,
+    }
     if args.json:
         print(json.dumps(payload, indent=2))
-    elif result.valid:
+    elif payload["valid"]:
         print("VMGA evidence valid")
     else:
         print("VMGA evidence invalid", file=sys.stderr)
-        for error in result.errors:
+        print(f"- integrity: {integrity['state']} ({integrity['reason']})", file=sys.stderr)
+        for error in sequence_result.errors:
             print(f"- {error}", file=sys.stderr)
-    return 0 if result.valid else 2
+        for error in integrity.get("errors", []):
+            print(f"- {error}", file=sys.stderr)
+    return 0 if payload["valid"] else 2
 
 
 def _build_backend(args: argparse.Namespace):
@@ -64,6 +109,16 @@ def _build_backend(args: argparse.Namespace):
         home=args.gog_home,
         timeout_seconds=args.gog_timeout,
     )
+
+
+def _evidence_integrity_mode_from_env() -> str:
+    key_set = bool(os.getenv("VMGA_EVIDENCE_HMAC_KEY"))
+    key_id_set = bool(os.getenv("VMGA_EVIDENCE_HMAC_KEY_ID"))
+    if key_set and key_id_set:
+        return "hmac_chain"
+    if key_set or key_id_set:
+        return "misconfigured_hmac_chain"
+    return "append_only"
 
 
 def approval_token_main(argv: list[str] | None = None) -> int:
@@ -246,6 +301,7 @@ def operator_main(argv: list[str] | None = None) -> int:
                 state_db_path=args.state_db,
                 ledger_path=args.ledger,
                 ledger_rotate_bytes=args.ledger_rotate_bytes,
+                evidence_integrity=_evidence_integrity_mode_from_env(),
                 bearer_token_set=bool(bearer_token),
                 gog_binary=args.gog_binary,
                 gog_home=args.gog_home,
@@ -385,6 +441,7 @@ def broker_main(argv: list[str] | None = None) -> int:
         state_db_path=args.state_db,
         ledger_path=args.ledger,
         ledger_rotate_bytes=args.ledger_rotate_bytes,
+        evidence_integrity=_evidence_integrity_mode_from_env(),
         bearer_token_set=bool(bearer_token),
         allow_unauthenticated=args.allow_unauthenticated,
         gog_binary=getattr(backend, "binary", args.gog_binary),

@@ -13,10 +13,17 @@ All notable changes to VMGA will be documented here.
   requires an evidence-referenced operator attestation.
 - Added v0.3.0 design records for tamper-evident evidence and asymmetric
   out-of-domain approval signatures.
+<<<<<<< HEAD
 - Added opt-in Ed25519 approval-signature mode with broker-held public keys,
   detached signature evidence, single-use approval nonces, and an external
   `vmga-approval-sign` helper. HMAC approval remains available for advisory and
   development use and is broker-forgeable because the broker holds the secret.
+=======
+- Implemented opt-in Tier-1 evidence HMAC chaining with expected-head
+  checkpoints, cross-file rotated-ledger verification, key rotation support,
+  crash-after-append recovery, and separate CLI reporting for advisory event
+  checks versus integrity state.
+>>>>>>> b5dcda4 (Add Tier-1 tamper-evident evidence ledger with HMAC chain (#2))
 
 ## v0.2.1 - 2026-06-10
 

@@ -9,7 +9,8 @@ with advisory verification.
 ## Goal
 
 VMGA should make post-hoc evidence modification detectable under an explicit
-trust boundary. The target is tamper-evident evidence, not tamper-proof storage.
+trust boundary. The target is tamper-evident evidence, not storage that prevents
+all possible modification.
 VMGA cannot prevent a writer with filesystem access from deleting or rewriting
 bytes; it can make mutation detectable when the actor cannot forge the integrity
 anchor used by the verifier.

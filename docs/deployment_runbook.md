@@ -25,6 +25,8 @@ Minimum broker environment:
 ```text
 VMGA_APPROVAL_SECRET=<operator-owned secret>
 VMGA_BROKER_TOKEN=<operator-owned broker bearer token>
+VMGA_EVIDENCE_HMAC_KEY=<operator-owned evidence HMAC secret>
+VMGA_EVIDENCE_HMAC_KEY_ID=<stable evidence key id>
 GOG_KEYRING_PASSWORD=<operator-owned keyring password>
 VMGA_BROKER_URL=http://127.0.0.1:8765
 ```
@@ -63,7 +65,10 @@ curl -fsS http://127.0.0.1:8765/v1/posture
 vmga-operator --json posture --local \
   --agent-root /path/to/agent/workspace
 vmga-operator --state-db /path/outside/agent/state.sqlite3 list
-vmga-verify-evidence /path/outside/agent/evidence.jsonl --json
+vmga-verify-evidence /path/outside/agent/evidence.jsonl \
+  --state-db /path/outside/agent/state.sqlite3 \
+  --hmac-key "$VMGA_EVIDENCE_HMAC_KEY_ID=$VMGA_EVIDENCE_HMAC_KEY" \
+  --json
 ```
 
 `/v1/posture` is a runtime self-check, not a formal sandbox proof. It reports
@@ -85,6 +90,7 @@ cron, or plugin write paths outside VMGA. Include a durable reference with
 reviewable deployment evidence.
 
 The posture self-check reports configured intent and observable placement, not
+<<<<<<< HEAD
 proof that every configured enforcement path has executed. `hmac_chain`
 evidence remains a design gate until the evidence-integrity implementation
 ships. `signature` approval mode verifies Ed25519 detached approvals with
@@ -93,6 +99,14 @@ when the approver private key is isolated from both broker and agent authority
 domains. Residuals: private-key compromise, operator signing-device compromise,
 and intentional operator approval are outside VMGA's approval-signature
 boundary. HMAC approval mode remains broker-forgeable and advisory/dev.
+=======
+proof that every configured enforcement path has executed. Evidence integrity is
+active only when both evidence HMAC environment variables are present and the
+expected-head checkpoint is stored outside the agent-writable workspace. Without
+that anchor, JSONL evidence remains advisory and `vmga-verify-evidence` reports
+`cannot_verify`, never success. Approval signatures remain a design gate until
+the asymmetric approval-signature implementation ships.
+>>>>>>> b5dcda4 (Add Tier-1 tamper-evident evidence ledger with HMAC chain (#2))
 
 If `/health` reports lockdown, inspect evidence first, then reset only through
 an operator-controlled maintenance path. `reset_lockdown` is an in-process
@@ -121,6 +135,18 @@ The JSONL ledger supports size-based rotation through `--ledger-rotate-bytes`
 and `--ledger-backups`. Operators can also use OS log rotation if compression or
 central collection is required. Rotate before local disk pressure becomes a
 mailbox availability risk.
+
+When evidence HMAC mode is enabled, VMGA verifies the ordered retained segment
+set from the oldest rotated backup through the active file. It checks per-record
+MACs, sequence continuity, cross-file seams, the genesis anchor, and the
+expected head. Deleting a retained rotated segment is reported as tampering.
+History pruned beyond the retained backups is outside Tier 1 and needs an
+external append-only or WORM sink if older history must remain verifiable.
+
+Tier 1 does not protect against a compromised broker/operator context that can
+both rewrite evidence and read the evidence HMAC key, or forge the checkpoint in
+state. Keep the key, state DB, and ledger outside the agent authority domain and
+record that placement in deployment evidence.
 
 ## Real-Account Smoke Test
 

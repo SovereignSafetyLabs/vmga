@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 
+from .evidence_integrity import canonical_json_line
+
 
 class JSONLVMGALedger:
     def __init__(self, path: str | Path, *, rotate_bytes: int = 0, backup_count: int = 5):
@@ -30,7 +32,12 @@ class JSONLVMGALedger:
         self.path.rename(self.path.with_name(f"{self.path.name}.1"))
 
     def append(self, event: Dict[str, Any]) -> None:
-        line = json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
+        line = canonical_json_line(event)
+        self.append_line(line)
+
+    def append_line(self, line: str) -> None:
+        if not line.endswith("\n"):
+            raise ValueError("ledger lines must end with newline")
         self._rotate_if_needed(len(line.encode("utf-8")))
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(line)
