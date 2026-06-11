@@ -171,6 +171,10 @@ default `[VMGA-SMOKE]` tag or another unique subject/body marker, verify the
 draft in Gmail, then search for that marker in Drafts and delete the generated
 drafts before sharing evidence or tagging a release.
 
+The smoke script uses a per-run actor for its intentional send-denial probe so
+repeated smoke runs do not accumulate denial counts toward the broker lockdown
+threshold for the main smoke actor.
+
 Read/search and send-denial probe:
 
 ```bash

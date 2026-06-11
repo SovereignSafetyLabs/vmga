@@ -8,6 +8,7 @@ import hmac
 import json
 import os
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,9 @@ class Transcript:
 def run_live_smoke(args: argparse.Namespace) -> int:
     redactions = [args.safe_recipient or "", args.draft_body or "", args.broker_token or ""]
     transcript = Transcript(args.out, redactions)
+    run_id = getattr(args, "run_id", "") or str(uuid.uuid4())
+    send_denial_actor_id = f"{args.actor_id}-send-denial-{run_id[:12]}"
+    smoke_metadata = {"source": "vmga_live_smoke", "run_id": run_id}
 
     try:
         health = _get_json(args.broker_url, "/health", token=args.broker_token, timeout=args.timeout)
@@ -84,7 +88,7 @@ def run_live_smoke(args: argparse.Namespace) -> int:
                 "actor_id": args.actor_id,
                 "search_query": args.search_query,
                 "max_results": args.max_results,
-                "metadata": {"source": "vmga_live_smoke"},
+                "metadata": smoke_metadata,
             },
             token=args.broker_token,
             timeout=args.timeout,
@@ -99,11 +103,11 @@ def run_live_smoke(args: argparse.Namespace) -> int:
             "/v1/proposals",
             {
                 "action": "send",
-                "actor_id": f"{args.actor_id}-send-denial",
+                "actor_id": send_denial_actor_id,
                 "recipients": [args.safe_recipient or "nobody@example.invalid"],
                 "content": "VMGA smoke send-denial probe. This should not send.",
                 "justification": "Verify send remains denied during VMGA live smoke.",
-                "metadata": {"source": "vmga_live_smoke"},
+                "metadata": smoke_metadata,
             },
             token=args.broker_token,
             timeout=args.timeout,
@@ -134,7 +138,7 @@ def run_live_smoke(args: argparse.Namespace) -> int:
                 "subject": f"{args.draft_tag} {args.draft_subject}".strip(),
                 "content": f"{args.draft_body}\n\n{args.draft_tag} safe-to-delete smoke draft",
                 "justification": "Verify approved draft creation through VMGA live smoke.",
-                "metadata": {"source": "vmga_live_smoke"},
+                "metadata": smoke_metadata,
             },
             token=args.broker_token,
             timeout=args.timeout,
@@ -193,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--broker-url", default=os.getenv("VMGA_BROKER_URL", "http://127.0.0.1:8765"))
     parser.add_argument("--broker-token", default=os.getenv("VMGA_BROKER_TOKEN"))
     parser.add_argument("--actor-id", default="vmga-live-smoke")
+    parser.add_argument("--run-id", default="", help="Optional smoke run id; defaults to a random UUID")
     parser.add_argument("--approver-id", default="operator")
     parser.add_argument("--approval-secret-env", default="VMGA_APPROVAL_SECRET")
     parser.add_argument("--search-query", default="in:inbox")
