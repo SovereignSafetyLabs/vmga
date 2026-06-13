@@ -42,6 +42,8 @@ All notable changes to VMGA will be documented here.
   urgency or authority-language pressure, and proposal mutation attempts.
 - Added a safe local fixture playground with fake mailbox data, deterministic
   terminal evidence logs, replay-denial output, and no Gmail/OAuth dependency.
+- Added a public roadmap that frames operator-experience work around preserving
+  VMGA's approval, signing, evidence, and deployment-boundary constraints.
 
 ### Changed
 

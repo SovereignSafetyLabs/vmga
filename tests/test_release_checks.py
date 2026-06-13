@@ -80,6 +80,7 @@ def _populate_safe_repo(root: Path) -> None:
     """)
     _write(root / "docs" / "evidence.md", "VMGA does not claim prompt-injection prevention, DLP, host compromise protection, browser/session isolation, compliance certification, or security of Hermes/OpenClaw internals.\n")
     _write(root / "docs" / "gmail_backend_options.md", "VMGA does not claim prompt-injection prevention, DLP, host compromise protection, browser/session isolation, compliance certification, or security of Hermes/OpenClaw internals.\n")
+    _write(root / "docs" / "roadmap.md", "VMGA will not claim prompt-injection prevention, DLP, host compromise protection, browser/session isolation, compliance certification, or security of Hermes/OpenClaw internals.\n")
     _write(root / "docs" / "action_catalog.md", """
         # VMGA Action Catalog
 

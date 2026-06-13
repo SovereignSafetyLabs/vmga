@@ -75,6 +75,7 @@ REQUIRED_FILES = [
     "docs/evidence.md",
     "docs/gmail_backend_options.md",
     "docs/action_catalog.md",
+    "docs/roadmap.md",
 ]
 
 REQUIRED_DOC_PHRASES: dict[str, list[str]] = {

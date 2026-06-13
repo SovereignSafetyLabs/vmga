@@ -95,6 +95,7 @@ tests/             Unit tests
 - [Evidence notes](docs/evidence.md)
 - [Evidence integrity architecture](docs/evidence_integrity_design.md)
 - [Approval signing architecture](docs/approval_signing_design.md)
+- [Roadmap](docs/roadmap.md)
 - [Hermes integration notes](docs/hermes_integration.md)
 - [OpenClaw integration notes](docs/openclaw_integration.md)
 - [Gmail backend options](docs/gmail_backend_options.md)
@@ -124,6 +125,14 @@ Its terminal output includes deterministic `VMGA_PLAYGROUND` lines showing a
 direct execution bypass denial, repeated-denial `vmga_pressure_signal` evidence,
 proposal-mutation `vmga_pressure_signal` evidence, and a replay denial with
 `vmga_approval_already_used`.
+
+## Roadmap
+
+VMGA's roadmap focuses on reducing operator friction while preserving the
+approval, signing, evidence, and deployment-boundary constraints that make the
+control meaningful. The near-term direction is operator experience without
+boundary collapse: easier to run, without weakening what it enforces. See
+[docs/roadmap.md](docs/roadmap.md) for direction and explicit anti-goals.
 
 ## Broker Mode
 
