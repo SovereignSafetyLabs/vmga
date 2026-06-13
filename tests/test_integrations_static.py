@@ -146,6 +146,66 @@ def test_hermes_label_handler_posts_structured_broker_payload():
     assert captured["payload"]["parameters"] == {"label": "Needs Review"}
 
 
+def test_hermes_create_draft_accepts_wrapped_arguments_shape():
+    captured: Dict[str, Any] = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["payload"] = json.loads(req.data.decode("utf-8")) if req.data else {}
+        return _FakeBrokerResponse(b'{"status":"REVIEW_REQUIRED"}')
+
+    with patch("integrations.hermes.tools.request.urlopen", fake_urlopen):
+        output = json.loads(
+            hermes_tools.mail_create_draft(
+                {
+                    "arguments": {
+                        "recipients": ["test@example.com"],
+                        "subject": "VMGA Hermes fake smoke test - do not send",
+                        "content": "This is a governed VMGA/Hermes smoke test draft. Do not send.",
+                        "actor_id": "hermes-smoke",
+                        "session_id": "hermes-tui-smoke",
+                        "justification": "Hermes fake-backend smoke test",
+                    }
+                },
+                broker_url="https://vmga.example.invalid",
+            )
+        )
+
+    assert output["status"] == "OK"
+    assert captured["payload"]["action"] == "create_draft"
+    assert captured["payload"]["recipients"] == ["test@example.com"]
+    assert captured["payload"]["content"].startswith("This is a governed")
+    assert captured["payload"]["subject"] == "VMGA Hermes fake smoke test - do not send"
+    assert captured["payload"]["actor_id"] == "hermes-smoke"
+
+
+def test_hermes_create_draft_accepts_keyword_arguments_shape():
+    captured: Dict[str, Any] = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["payload"] = json.loads(req.data.decode("utf-8")) if req.data else {}
+        return _FakeBrokerResponse(b'{"status":"REVIEW_REQUIRED"}')
+
+    with patch("integrations.hermes.tools.request.urlopen", fake_urlopen):
+        output = json.loads(
+            hermes_tools.mail_create_draft(
+                recipients=["test@example.com"],
+                subject="VMGA Hermes fake smoke test - do not send",
+                content="This is a governed VMGA/Hermes smoke test draft. Do not send.",
+                actor_id="hermes-smoke",
+                session_id="hermes-tui-smoke",
+                justification="Hermes fake-backend smoke test",
+                broker_url="https://vmga.example.invalid",
+            )
+        )
+
+    assert output["status"] == "OK"
+    assert captured["payload"]["action"] == "create_draft"
+    assert captured["payload"]["recipients"] == ["test@example.com"]
+    assert captured["payload"]["content"].startswith("This is a governed")
+    assert captured["payload"]["subject"] == "VMGA Hermes fake smoke test - do not send"
+    assert captured["payload"]["actor_id"] == "hermes-smoke"
+
+
 def test_hermes_handler_fails_closed_when_broker_is_missing():
     output = json.loads(hermes_tools.mail_get({"message_id": "m1"}))
     assert output["status"] == "DENY"
