@@ -15,6 +15,8 @@ from urllib import error, request
 
 BROKER_DEFAULT_ENDPOINT = "/v1/proposals"
 BROKER_TIMEOUT_SECONDS = 2.5
+BROKER_CONTEXT_KEYS = {"broker_url", "broker_token"}
+ARG_WRAPPER_KEYS = ("arguments", "args", "input", "payload", "tool_input")
 
 
 def _as_list(value: Any) -> List[str]:
@@ -41,6 +43,27 @@ def _denial_json(tool_name: str, error_code: str, detail: str) -> str:
         },
         sort_keys=True,
     )
+
+
+def _coerce_tool_args(args: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    if args is None:
+        tool_args: Dict[str, Any] = {}
+    elif isinstance(args, dict):
+        tool_args = dict(args)
+    else:
+        raise ValueError("Hermes tool arguments must be a JSON object")
+
+    for key in ARG_WRAPPER_KEYS:
+        wrapped = tool_args.get(key)
+        if isinstance(wrapped, dict):
+            tool_args = dict(wrapped)
+            break
+
+    for key, value in kwargs.items():
+        if key not in BROKER_CONTEXT_KEYS and key not in tool_args:
+            tool_args[key] = value
+
+    return tool_args
 
 
 def _resolve_broker_url(args: Any, kwargs: Dict[str, Any]) -> str:
@@ -107,10 +130,7 @@ def _send_to_broker(tool_name: str, payload: Dict[str, Any], args: Any, kwargs: 
     }, sort_keys=True)
 
 
-def _build_payload(action: str, args: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    if not isinstance(args, dict):
-        raise ValueError("Hermes tool arguments must be a JSON object")
-
+def _build_payload(action: str, args: Dict[str, Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
     actor_id = args.get("actor_id") or kwargs.get("actor_id") or "hermes-actor"
     if not isinstance(actor_id, str) or not actor_id.strip():
         actor_id = "hermes-actor"
@@ -137,88 +157,89 @@ def _build_payload(action: str, args: Any, kwargs: Dict[str, Any]) -> Dict[str, 
 
 def _handler(tool_name: str, args: Any, kwargs: Dict[str, Any], *, action: str) -> str:
     try:
-        payload = _build_payload(action, args, kwargs)
+        tool_args = _coerce_tool_args(args, kwargs)
+        payload = _build_payload(action, tool_args, kwargs)
     except (TypeError, ValueError) as exc:
         return _denial_json(tool_name, "vmga_invalid_payload", str(exc))
 
     extra_payload: Dict[str, Any] = {**payload}
 
     if tool_name == "mail_search":
-        extra_payload["search_query"] = str(args.get("query", "")).strip()
+        extra_payload["search_query"] = str(tool_args.get("query", "")).strip()
         if not extra_payload["search_query"]:
             return _denial_json(tool_name, "vmga_invalid_payload", "query is required")
-        extra_payload["max_results"] = args.get("max_results", 10)
+        extra_payload["max_results"] = tool_args.get("max_results", 10)
 
     elif tool_name == "mail_get":
-        message_id = args.get("message_id") if isinstance(args, dict) else None
+        message_id = tool_args.get("message_id")
         if not isinstance(message_id, str) or not message_id.strip():
             return _denial_json(tool_name, "vmga_invalid_payload", "message_id is required")
         extra_payload["message_id"] = message_id
 
     elif tool_name == "mail_get_attachment":
-        if not isinstance(args, dict) or not args.get("message_id"):
+        if not tool_args.get("message_id"):
             return _denial_json(tool_name, "vmga_invalid_payload", "message_id is required")
-        if not args.get("attachment_id"):
+        if not tool_args.get("attachment_id"):
             return _denial_json(tool_name, "vmga_invalid_payload", "attachment_id is required")
-        extra_payload["message_id"] = str(args.get("message_id"))
-        extra_payload["attachment_ids"] = [str(args.get("attachment_id"))]
+        extra_payload["message_id"] = str(tool_args.get("message_id"))
+        extra_payload["attachment_ids"] = [str(tool_args.get("attachment_id"))]
 
     elif tool_name == "mail_archive":
-        message_ids = _as_list(args.get("message_ids"))
-        if not message_ids and args.get("message_id"):
-            message_ids = [str(args["message_id"])]
+        message_ids = _as_list(tool_args.get("message_ids"))
+        if not message_ids and tool_args.get("message_id"):
+            message_ids = [str(tool_args["message_id"])]
         if not message_ids:
             return _denial_json(tool_name, "vmga_invalid_payload", "message_id or message_ids is required")
         extra_payload["message_ids"] = message_ids
 
     elif tool_name == "mail_apply_label":
-        message_ids = _as_list(args.get("message_ids"))
-        if not message_ids and args.get("message_id"):
-            message_ids = [str(args["message_id"])]
+        message_ids = _as_list(tool_args.get("message_ids"))
+        if not message_ids and tool_args.get("message_id"):
+            message_ids = [str(tool_args["message_id"])]
         if not message_ids:
             return _denial_json(tool_name, "vmga_invalid_payload", "message_id or message_ids is required")
-        label = str(args.get("label", "")).strip()
+        label = str(tool_args.get("label", "")).strip()
         if not label:
             return _denial_json(tool_name, "vmga_invalid_payload", "label is required")
         extra_payload["message_ids"] = message_ids
         extra_payload["parameters"] = {**extra_payload["parameters"], "label": label}
 
     if action in {"create_draft", "send"}:
-        recipients = _as_list(args.get("recipients"))
+        recipients = _as_list(tool_args.get("recipients"))
         if not recipients:
             return _denial_json(tool_name, "vmga_invalid_payload", "recipients are required")
-        if not isinstance(args.get("content"), str) or not str(args["content"]).strip():
+        if not isinstance(tool_args.get("content"), str) or not str(tool_args["content"]).strip():
             return _denial_json(tool_name, "vmga_invalid_payload", "content is required")
         extra_payload["recipients"] = recipients
 
-    return _send_to_broker(tool_name, extra_payload, args, kwargs)
+    return _send_to_broker(tool_name, extra_payload, tool_args, kwargs)
 
 
-def mail_search(args: Any, **kwargs) -> str:
+def mail_search(args: Any = None, **kwargs) -> str:
     return _handler("mail_search", args, kwargs, action="read")
 
 
-def mail_get(args: Any, **kwargs) -> str:
+def mail_get(args: Any = None, **kwargs) -> str:
     return _handler("mail_get", args, kwargs, action="read")
 
 
-def mail_get_attachment(args: Any, **kwargs) -> str:
+def mail_get_attachment(args: Any = None, **kwargs) -> str:
     return _handler("mail_get_attachment", args, kwargs, action="download_attachment")
 
 
-def mail_archive(args: Any, **kwargs) -> str:
+def mail_archive(args: Any = None, **kwargs) -> str:
     return _handler("mail_archive", args, kwargs, action="archive")
 
 
-def mail_apply_label(args: Any, **kwargs) -> str:
+def mail_apply_label(args: Any = None, **kwargs) -> str:
     return _handler("mail_apply_label", args, kwargs, action="apply_label")
 
 
-def mail_create_draft(args: Any, **kwargs) -> str:
+def mail_create_draft(args: Any = None, **kwargs) -> str:
     return _handler("mail_create_draft", args, kwargs, action="create_draft")
 
 
-def mail_send(args: Any, **kwargs) -> str:
+def mail_send(args: Any = None, **kwargs) -> str:
     return _handler("mail_send", args, kwargs, action="send")
 
 
