@@ -81,11 +81,12 @@ tests or documentation that name the new evidence. Deployment-specific gaps
 should be captured in the operator evidence bundle and, when they affect the
 reference implementation or public docs, promoted to GitHub issues.
 
-For the v0.3.0 release train, the final repo-level DSOVS/release-governance
-paperwork is tracked by:
+For the v0.3.0 release train, repo-level DSOVS/release-governance
+paperwork was completed through:
 
 - #9: DSOVS self-assessment pass.
 - #10: Release checklist verification automation and manual-gate separation.
 
-After those issues close, remaining DSOVS gaps are expected to be
-deployment-specific unless a new issue is opened against the reference repo.
+Current remaining DSOVS gaps are expected to be deployment-specific unless a
+new issue is opened against the reference repo. Known future repo-level work is
+tracked separately, including #54 for optional canary tripwire detection.
