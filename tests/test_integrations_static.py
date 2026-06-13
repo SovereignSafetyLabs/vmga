@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import yaml
 
+from integrations import hermes as hermes_plugin
 from integrations.openclaw.profile_adapter import OpenClawRequest, VMGAOpenClawProfileAdapter
 from integrations.hermes import schemas
 from integrations.hermes import tools as hermes_tools
@@ -93,6 +94,42 @@ def test_hermes_schemas_define_v5_tools():
         schemas.MAIL_SEND["name"],
     }
     assert names == set(HERMES_TOOLS)
+
+
+def test_hermes_registration_exposes_parameters_to_hermes_registry():
+    class FakeContext:
+        def __init__(self):
+            self.tools: Dict[str, Dict[str, Any]] = {}
+            self.skills: list[tuple[str, Path]] = []
+
+        def register_tool(self, *, name, toolset, schema, handler):
+            self.tools[name] = {
+                "toolset": toolset,
+                "schema": schema,
+                "handler": handler,
+            }
+
+        def register_skill(self, name, path):
+            self.skills.append((name, path))
+
+    ctx = FakeContext()
+    hermes_plugin.register(ctx)
+
+    assert set(ctx.tools) == set(HERMES_TOOLS)
+    for name, entry in ctx.tools.items():
+        schema = entry["schema"]
+        assert entry["toolset"] == "vmga_mail"
+        assert "parameters" in schema
+        assert "inputSchema" not in schema
+        assert schema["parameters"]["type"] == "object"
+        assert isinstance(schema["parameters"].get("properties"), dict)
+
+    draft_schema = ctx.tools["mail_create_draft"]["schema"]
+    assert draft_schema["description"] == "Create a draft proposal via VMGA governance"
+    assert draft_schema["parameters"]["required"] == ["recipients", "content"]
+    assert "recipients" in draft_schema["parameters"]["properties"]
+    assert "subject" in draft_schema["parameters"]["properties"]
+    assert "content" in draft_schema["parameters"]["properties"]
 
 
 def test_hermes_handler_returns_json_and_posts_to_broker():
