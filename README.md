@@ -54,15 +54,16 @@ checkpoint, can rewrite the retained evidence chain.
 ### Known Integration Advisory
 
 VMGA's core broker path does not depend on OpenClaw. The optional OpenClaw
-integration currently tracks OpenClaw `2026.6.5` as an external runtime and test
+integration currently tracks OpenClaw `2026.6.8` as an external runtime and test
 fixture. The OpenClaw integration's dev dependency tree includes a
-medium-severity `hono < 4.12.21` advisory inside OpenClaw's shrinkwrapped npm
+medium-severity `tar <= 7.5.15` advisory inside OpenClaw's published npm
 dependency tree. Production installs (`npm audit --omit=dev`) are clean, while
-GitHub Dependabot may surface the upstream dev-transitive advisory as
-default-branch moderate alerts. The vulnerable copy is pinned inside OpenClaw's
+GitHub Dependabot may surface the upstream dev-transitive advisory as a
+default-branch moderate alert. The vulnerable copy is pinned inside OpenClaw's
 published package, so VMGA cannot safely override it from this repository. Do
 not expose an OpenClaw-backed VMGA deployment to remote ingress until OpenClaw
-is patched or the deployment supplies an equivalent patched runtime with
+publishes a runtime with `tar >= 7.5.16` or the deployment supplies equivalent
+patched runtime evidence with
 loopback/private-network binding, token or trusted-proxy auth, operator
 allowlists, sandboxing, and direct-bypass evidence.
 
