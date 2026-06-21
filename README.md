@@ -51,19 +51,13 @@ JSONL with advisory verification. The Tier-1 residual is plain: an actor who
 can rewrite evidence and also read the HMAC key, or forge the expected-head
 checkpoint, can rewrite the retained evidence chain.
 
-### Known Integration Advisory
+### OpenClaw Integration Status
 
 VMGA's core broker path does not depend on OpenClaw. The optional OpenClaw
-integration currently tracks OpenClaw `2026.6.8` as an external runtime and test
-fixture. The OpenClaw integration's dev dependency tree includes a
-medium-severity `tar <= 7.5.15` advisory inside OpenClaw's published npm
-dependency tree. Production installs (`npm audit --omit=dev`) are clean, while
-GitHub Dependabot may surface the upstream dev-transitive advisory as a
-default-branch moderate alert. The vulnerable copy is pinned inside OpenClaw's
-published package, so VMGA cannot safely override it from this repository. Do
-not expose an OpenClaw-backed VMGA deployment to remote ingress until OpenClaw
-publishes a runtime with `tar >= 7.5.16` or the deployment supplies equivalent
-patched runtime evidence with
+integration currently pins OpenClaw `2026.6.9` as an external runtime and test
+fixture. The OpenClaw integration's dev dependency audit is expected to be clean
+at this version. Do not expose an OpenClaw-backed VMGA deployment to remote
+ingress unless the deployment has current dependency-review evidence,
 loopback/private-network binding, token or trusted-proxy auth, operator
 allowlists, sandboxing, and direct-bypass evidence.
 

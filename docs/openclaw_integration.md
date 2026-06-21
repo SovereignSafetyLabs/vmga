@@ -55,17 +55,15 @@ personal Google account or password-manager state in that runtime.
 ## Upstream Dependency Advisory
 
 VMGA treats OpenClaw as an optional external runtime, not as part of the VMGA
-broker. The npm package for OpenClaw `2026.6.8` currently ships a published
-dependency tree that pins `tar@7.5.15` under OpenClaw. Local full dev audits and
-GitHub Dependabot may report the upstream dev-transitive advisory fixed by
-`tar >= 7.5.16`; production audits (`npm audit --omit=dev`) are clean. Because
-the vulnerable copy is pinned inside OpenClaw's published package, VMGA's
-package-level `overrides` cannot reliably replace it.
+broker. The npm package for OpenClaw is pinned to `2026.6.9` instead of the
+floating `latest` tag so Dependabot and release evidence are tied to a concrete
+runtime version. Local full dev audits are expected to be clean at this version,
+and production audits (`npm audit --omit=dev`) should remain clean.
 
-Until OpenClaw publishes a patched runtime, keep OpenClaw VMGA deployments local
-or private-network only and treat any remote exposure as blocked unless the
-operator can prove an equivalent patched OpenClaw runtime, authenticated ingress,
-operator allowlists, sandboxing, and denied direct-bypass paths.
+Keep OpenClaw VMGA deployments local or private-network only and treat any
+remote exposure as blocked unless the operator can prove current dependency
+review, authenticated ingress, operator allowlists, sandboxing, and denied
+direct-bypass paths.
 
 ## Local Gateway Readiness
 
@@ -389,9 +387,12 @@ layer.
 
 ## Release Watchpoints
 
-OpenClaw `v2026.6.8` includes several security-relevant fixes that VMGA
+OpenClaw `v2026.6.9` includes several security-relevant fixes that VMGA
 deployments should preserve in release evidence:
 
+- The published runtime moves bundled `tar` to `7.5.16` and `undici` to `8.5.0`.
+  VMGA should keep OpenClaw pinned to explicit versions rather than `latest` so
+  Dependabot alerts reflect the audited runtime instead of historical ranges.
 - The bundled Hono runtime moved to the patched `4.12.25` line. VMGA should
   still keep HTTP ingress private or authenticated and retain gateway audit
   evidence before any remote exposure.
@@ -417,8 +418,8 @@ deployments should preserve in release evidence:
 
 ## References
 
-- OpenClaw 2026.6.8 Release:
-  https://github.com/openclaw/openclaw/releases/tag/v2026.6.8
+- OpenClaw 2026.6.9 Release:
+  https://github.com/openclaw/openclaw/releases/tag/v2026.6.9
 - OpenClaw Gateway Security: https://docs.openclaw.ai/gateway/security
 - OpenClaw Gateway Exposure Runbook:
   https://docs.openclaw.ai/gateway/security/exposure-runbook
